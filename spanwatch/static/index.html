@@ -63,10 +63,11 @@ main{overflow:auto;padding:14px 18px 40px}
 .meter .hot b{color:var(--red)}
 .bar{height:2px;background:var(--line);margin:-12px 0 12px;position:relative}
 .bar i{position:absolute;left:0;top:0;bottom:0;background:var(--sig);box-shadow:0 0 8px var(--sig);transition:width .9s linear}
-.tabs{display:flex;gap:0;align-items:end;border-bottom:1px solid var(--line2);margin-bottom:10px}
+.tabs{display:flex;flex-wrap:wrap;gap:0;align-items:end;border-bottom:1px solid var(--line2);margin-bottom:10px}
 .tabs button{background:none;border:0;border-bottom:2px solid transparent;color:var(--dim);font:inherit;padding:7px 14px;cursor:pointer;margin-bottom:-1px}
 .tabs button.sel{color:var(--text);border-bottom-color:var(--sig)}
-.tabs .tools{margin-left:auto;display:flex;gap:6px;align-items:center;padding-bottom:5px}
+.tabs .tools{margin-left:auto;display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding-bottom:5px}
+main{min-width:0}
 .count{color:var(--faint);font-size:11px}
 table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
 th{position:sticky;top:-14px;background:var(--ink);text-align:left;font-weight:500;color:var(--faint);font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid var(--line2);white-space:nowrap}
@@ -104,16 +105,16 @@ td.r,th.r{text-align:right}
 .gsect h3{display:flex;align-items:center;gap:14px}
 .gsect h3 .sub{letter-spacing:0;text-transform:none;color:var(--dim);font-weight:400}
 .gctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line)}
-.gctl .lg{display:flex;gap:10px;flex-wrap:wrap;font-size:11px;color:var(--dim)}
+.gctl .lg{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--dim)}
 .gctl .lg i{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:4px}
 .gctl .lg b{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:4px}
-#graph{position:relative;background:radial-gradient(ellipse at center,rgba(92,242,166,.03),transparent 70%)}
+#graph{position:relative;overflow:hidden;background:radial-gradient(ellipse at center,rgba(92,242,166,.03),transparent 70%)}
 .gsvg{display:block;user-select:none}
 .gsvg line{stroke-linecap:round;opacity:.55;transition:opacity .15s}
 .gsvg .nd{cursor:grab;transition:opacity .15s}
 .gsvg .nd circle{stroke:var(--ink);stroke-width:1.5}
-.gsvg text{fill:var(--text);font:10px var(--mono);paint-order:stroke;stroke:var(--ink);stroke-width:3px}
-.gsvg text.sub{fill:var(--faint);font-size:9px}
+.gsvg text{fill:var(--text);font:12px var(--mono);paint-order:stroke;stroke:var(--ink);stroke-width:3px}
+.gsvg text.sub{fill:var(--faint);font-size:11px}
 .gsvg text.hide{display:none}
 .gsvg.focus line{opacity:.06}.gsvg.focus line.hi{opacity:1}
 .gsvg.focus .nd{opacity:.2}.gsvg.focus .nd.hi{opacity:1}
@@ -515,14 +516,22 @@ function zoomBy(f, px, py){
   if(S.gplace) S.gplace();
 }
 
+let rzT;
+window.addEventListener("resize", () => { clearTimeout(rzT); rzT = setTimeout(() => {
+  const box = $("#graph");
+  if(S.tab === "mix" && box && S.gdata && !S.drag) drawGraph();
+}, 120); });
+
 function drawGraph(){
   const box = $("#graph"), d = S.gdata;
   if(!box || !d) return;
   S.gplace = null;
   if(!d.edges.length){ box.innerHTML = '<div class="empty">no IP pairs'+(S.q?" match":" yet")+'</div>'; return; }
-  const W = Math.max(box.clientWidth, 600), H = Math.round(Math.max(440, Math.min(820, 300 + d.nodes.length*4)));
-  S.gW = W; S.gH = H;
+  const W = Math.max(box.clientWidth, 320);
+  const H = Math.round(Math.max(380, Math.min(window.innerHeight - 140, 300 + d.nodes.length*6)));
   const Z = S.zoom;
+  if(S.gW && (S.gW !== W || S.gH !== H)){ Z.tx *= W/S.gW; Z.ty *= H/S.gH; }
+  S.gW = W; S.gH = H;
   const val = e => S.gm==="bytes" ? e.bytes : S.gm==="conns" ? e.flows : e.packets;
   const sc = S.gs==="log" ? (x => Math.log(Math.max(x,1))) : (x => x);
   const vs = d.edges.map(val), lo = sc(Math.min(...vs)), hi = sc(Math.max(...vs));
@@ -544,8 +553,8 @@ function drawGraph(){
     const show = labelled.has(n.id) ? "" : " hide", sub = n.name || n.org || "";
     s += '<g class="nd" data-n="'+esc(n.id)+'">'
       + '<circle r="'+n.r.toFixed(1)+'" fill="'+ACLR[ipClass(n.id)]+'"/>'
-      + '<text class="a-'+ipClass(n.id)+show+'" x="'+(n.r+4).toFixed(1)+'" y="3">'+esc(n.id)+'</text>'
-      + (sub ? '<text class="sub'+(n.name?"":" org")+show+'" x="'+(n.r+4).toFixed(1)+'" y="14">'+esc(sub.length>34?sub.slice(0,33)+"…":sub)+'</text>' : "")
+      + '<text class="a-'+ipClass(n.id)+show+'" x="'+(n.r+4).toFixed(1)+'" y="4">'+esc(n.id)+'</text>'
+      + (sub ? '<text class="sub'+(n.name?"":" org")+show+'" x="'+(n.r+4).toFixed(1)+'" y="18">'+esc(sub.length>34?sub.slice(0,33)+"…":sub)+'</text>' : "")
       + '<title>'+esc(n.id+(n.name?"\n"+n.name:"")+(n.org?"\norg: "+n.org:"")+"\n"+({lan:"LAN/localhost",vpn:"internal/VPN",pub:"public"})[ipClass(n.id)]+" · "+num(n.packets)+" pkts · "+bytes(n.bytes)+" · "+adj[n.id].length+" peers"+(isPublic(n.id)?"\nright-click: whois":""))+'</title></g>'; });
   box.innerHTML = s + '</svg><div class="zbar"><button data-gz="in" title="zoom in">+</button><button data-gz="out" title="zoom out">−</button><button data-gz="reset" title="reset view">fit</button><span id="zlab"></span></div>';
 

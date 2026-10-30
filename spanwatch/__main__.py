@@ -46,6 +46,9 @@ def main(argv=None):
                     help="extra Host header names to accept (e.g. a tailnet name)")
     sv.add_argument("--allow-addressed", action="store_true",
                     help="DANGER/testing: allow capture on an interface with IPs")
+    sv.add_argument("--lan", action="append", default=[],
+                    help="extra CIDR to colour as local LAN (repeatable); the uplink's "
+                         "subnet is detected automatically")
     sv.add_argument("--no-whois", action="store_true",
                     help="disable on-demand RDAP/Cymru lookups (no outbound traffic)")
 
@@ -78,7 +81,7 @@ def main(argv=None):
 
     host, _, port = a.listen.rpartition(":")
     app = App(store, a.iface, _ports(a.dns_ports), a.max_duration, a.keep, a.allow_addressed,
-              whois=Whois(store, enabled=not a.no_whois))
+              whois=Whois(store, enabled=not a.no_whois), lan=a.lan)
     httpd = serve(app, host.strip("[]"), int(port), a.allow_host)
 
     def bye(*_):

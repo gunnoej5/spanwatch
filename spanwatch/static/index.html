@@ -9,7 +9,7 @@
   --ink:#07090b; --panel:#0d1114; --panel2:#11171b; --line:#1d262c; --line2:#2a363e;
   --text:#c9d4d8; --dim:#6f7f87; --faint:#43525a;
   --sig:#5cf2a6; --sig-d:#1d4d38; --amber:#ffb547; --amber-d:#4a3613;
-  --red:#ff5d5d; --red-d:#4a1717; --blue:#6cb6ff; --violet:#b69cff;
+  --red:#ff5d5d; --orange:#ff9f43; --red-d:#4a1717; --blue:#6cb6ff; --violet:#b69cff;
   --mono:"JetBrains Mono","IBM Plex Mono","Cascadia Code",ui-monospace,SFMono-Regular,Menlo,monospace;
   --sans:"Inter Tight","IBM Plex Sans",system-ui,sans-serif;
 }
@@ -76,7 +76,10 @@ td{padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;vertic
 tr:hover td{background:rgba(92,242,166,.035)}
 td.r,th.r{text-align:right}
 .ip{color:var(--text);cursor:pointer}
-.ip:hover{color:var(--sig)}
+.ip:hover{text-decoration:underline}
+.a-lan{color:var(--sig)}.a-vpn{color:var(--orange)}.a-pub{color:var(--red)}
+#wpanel .wh b.a-vpn{color:var(--orange)}#wpanel .wh b.a-pub{color:var(--red)}
+.gsvg text.a-lan{fill:var(--sig)}.gsvg text.a-vpn{fill:var(--orange)}.gsvg text.a-pub{fill:var(--red)}
 .nm{display:block;color:var(--faint);font-size:11px;max-width:300px;overflow:hidden;text-overflow:ellipsis}
 .arrow{color:var(--faint);padding:0 2px}
 .p-TCP{color:var(--blue)}.p-UDP{color:var(--violet)}.p-ICMP,.p-ICMPv6{color:var(--amber)}
@@ -198,9 +201,59 @@ const CAT = {wireguard:"vpn",openvpn:"vpn",ipsec:"vpn","pptp-vpn":"vpn","l2tp-vp
   bittorrent:"p2p","bittorrent-dht":"p2p",p2p:"p2p",stun:"rtc",http:"plain",encrypted:"unk"};
 const CATC = {vpn:"#ff5dc8",remote:"#ffb547",web:"#6cb6ff",p2p:"#ff5d5d",rtc:"#b69cff",plain:"#5cf2a6",unk:"#c9d4d8",none:"#46565e"};
 const CATN = {vpn:"vpn/tunnel",remote:"ssh/remote",web:"tls/quic",p2p:"torrent/p2p",rtc:"stun/rtc",plain:"plaintext",unk:"encrypted?",none:"other"};
-const KINDC = {local:"#5cf2a6",public:"#ff8a5c",cgnat:"#ffb547",multicast:"#6f7f87",loopback:"#6cb6ff",other:"#6f7f87"};
+const ACLR = {lan:"#5cf2a6", vpn:"#ff9f43", pub:"#ff5d5d"};
 const catOf = g => CAT[String(g||"").replace(/\?$/,"")] || (g ? "unk" : "none");
 const CONFN = ["","heuristic (port/entropy/behaviour)","strong hint","protocol signature"];
+// ipclass-begin
+// lan = this host's LAN subnet(s) + loopback/link-local/multicast  -> green
+// vpn = other internal space: RFC1918 elsewhere, CGNAT/Tailscale, ULA -> orange
+// pub = everything else                                             -> red
+function v4int(s){ const p = String(s).split("."); if(p.length!==4) return null;
+  let n = 0; for(const x of p){ if(!/^\d{1,3}$/.test(x) || +x>255) return null; n = n*256 + (+x); } return n; }
+function v6groups(s){
+  s = String(s).toLowerCase().split("%")[0];
+  if(!s.includes(":")) return null;
+  if(s.includes(".")){ const i = s.lastIndexOf(":"), v = v4int(s.slice(i+1)); if(v==null) return null;
+    s = s.slice(0,i+1) + Math.floor(v/65536).toString(16) + ":" + (v%65536).toString(16); }
+  const parts = s.split("::"); if(parts.length > 2) return null;
+  const h = parts[0] ? parts[0].split(":") : [], t = parts.length===2 && parts[1] ? parts[1].split(":") : [];
+  const g = parts.length===2 ? [...h, ...Array(Math.max(0, 8-h.length-t.length)).fill("0"), ...t] : h;
+  if(g.length!==8 || g.some(x=>!/^[0-9a-f]{1,4}$/.test(x))) return null;
+  return g.map(x=>parseInt(x,16));
+}
+function parseNet(c){
+  const [a, l] = String(c).split("/"), v4 = v4int(a);
+  if(v4 != null){ const len = l==null ? 32 : +l; return len>=0 && len<=32 ? {v:4, n:v4, len} : null; }
+  const g = v6groups(a); if(!g) return null;
+  const len = l==null ? 128 : +l; return len>=0 && len<=128 ? {v:6, g, len} : null;
+}
+function inNet(ip4, ip6, net){
+  if(net.v===4){ if(ip4==null) return false; if(!net.len) return true;
+    const d = 2**(32-net.len); return Math.floor(ip4/d) === Math.floor(net.n/d); }
+  if(!ip6) return false;
+  let len = net.len;
+  for(let i=0; i<8 && len>0; i++){ const n = Math.min(16,len), m = (0xffff << (16-n)) & 0xffff;
+    if((ip6[i]&m) !== (net.g[i]&m)) return false; len -= n; }
+  return true;
+}
+const NET_LOCAL = ["127.0.0.0/8","169.254.0.0/16","224.0.0.0/4","255.255.255.255/32","0.0.0.0/32",
+  "::1/128","::/128","fe80::/10","ff00::/8"].map(parseNet);
+const NET_INTERNAL = ["10.0.0.0/8","172.16.0.0/12","192.168.0.0/16","100.64.0.0/10","fc00::/7"].map(parseNet);
+let NET_LAN = [], NET_LAN_KEY = "";
+function setLan(list){ const k = (list||[]).join(","); if(k===NET_LAN_KEY) return false;
+  NET_LAN_KEY = k; NET_LAN = (list||[]).map(parseNet).filter(Boolean); ipClass.c = {}; return true; }
+function ipClass(ip){
+  const c = ipClass.c || (ipClass.c = {});
+  if(c[ip]) return c[ip];
+  const a4 = v4int(ip), a6 = a4==null ? v6groups(ip) : null;
+  let m4 = a4, m6 = a6;
+  if(a6 && a6.slice(0,5).every(x=>x===0) && a6[5]===0xffff){ m4 = a6[6]*65536 + a6[7]; m6 = null; }
+  const hit = list => list.some(n => inNet(m4, m6, n));
+  const r = (m4==null && !m6) ? "lan" : hit(NET_LOCAL) || hit(NET_LAN) ? "lan" : hit(NET_INTERNAL) ? "vpn" : "pub";
+  return c[ip] = r;
+}
+const ipSpan = ip => '<span class="ip a-'+ipClass(ip)+'" data-ip="'+esc(ip)+'">'+esc(ip)+'</span>';
+// ipclass-end
 function isPublic(ip){
   ip = String(ip||"").toLowerCase();
   if(ip.includes(":")) return /^[23]/.test(ip) && !ip.startsWith("2001:db8");
@@ -211,7 +264,7 @@ function isPublic(ip){
 }
 const wiBtn = ip => (S.status?.whois && isPublic(ip)) ? '<button class="wi" data-whois="'+esc(ip)+'" title="whois / ARIN">ⓘ</button>' : "";
 async function openWhois(ip, refresh){
-  S.wip = ip; $("#wpanel").hidden = false; $("#wip").textContent = ip;
+  S.wip = ip; $("#wpanel").hidden = false; $("#wip").textContent = ip; $("#wip").className = "a-"+ipClass(ip);
   $("#wbody").innerHTML = '<div class="hint" style="padding:14px">querying registries…</div>';
   try{
     const d = await api("/api/whois?ip="+encodeURIComponent(ip)+(refresh?"&refresh=1":""), {headers:{"X-Spanwatch-Action":"1"}});
@@ -350,7 +403,7 @@ $("#del").onclick = async () => {
   if(S.sel==null || !confirm("Delete session #"+S.sel+"?")) return;
   try{ await api("/api/sessions/"+S.sel, {method:"DELETE", headers:{"X-Spanwatch-Action":"1"}}); S.sel=null; await tick(true) }catch(e){ oops(e.message) }
 };
-function ipCell(ip, name){ return '<span class="ip" data-ip="'+esc(ip)+'">'+esc(ip)+'</span>'+wiBtn(ip)+(name?'<span class="nm" title="'+esc(name)+'">'+esc(name)+'</span>':"") }
+function ipCell(ip, name){ return ipSpan(ip)+wiBtn(ip)+(name?'<span class="nm" title="'+esc(name)+'">'+esc(name)+'</span>':"") }
 $("#view").onclick = e => {
   const w = e.target.closest("[data-whois]"); if(w){ openWhois(w.dataset.whois); return; }
   const z = e.target.closest("[data-gz]");
@@ -396,13 +449,13 @@ function mixView(d){
   const b = d.breakdown || {}, i = d.insights || {};
   const protos = (b.protos||[]).map(p=>({key:p.proto, value:p.bytes, pk:p.packets}));
   return '<div class="grid">'
-    + hist("Top talkers (bytes)", i.talkers, bytes, "", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>'+wiBtn(r.key)+(r.name?' <span class="svc">'+esc(r.name)+'</span>':r.org?' <span class="svc org">'+esc(r.org)+'</span>':""))
+    + hist("Top talkers (bytes)", i.talkers, bytes, "", r => ipSpan(r.key)+wiBtn(r.key)+(r.name?' <span class="svc">'+esc(r.name)+'</span>':r.org?' <span class="svc org">'+esc(r.org)+'</span>':""))
     + hist("Protocols (bytes)", protos, bytes)
     + hist("Services (bytes)", i.services, bytes)
     + hist("Traffic guesses (bytes)", i.guesses, bytes, "", r => '<span class="g conf'+(r.key.endsWith("?")?1:3)+'" style="--c:'+CATC[catOf(r.key)]+'">'+esc(r.key)+'</span>')
     + hist("DNS names (queries)", i.qnames, num, "amber")
-    + hist("DNS requestors", i.dns_clients, num, "amber", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>'+wiBtn(r.key))
-    + hist("DNS providers", i.resolvers, num, "amber", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>'+wiBtn(r.key))
+    + hist("DNS requestors", i.dns_clients, num, "amber", r => ipSpan(r.key)+wiBtn(r.key))
+    + hist("DNS providers", i.resolvers, num, "amber", r => ipSpan(r.key)+wiBtn(r.key))
     + hist("DNS rcodes", i.rcodes, num, "amber")
     + hist("Non-IP frames", (b.l2||[]).map(x=>({key:x.ethertype,value:x.frames})), num)
     + '</div>' + graphShell();
@@ -412,7 +465,7 @@ function mixView(d){
 function graphShell(){
   const seg = (attr, cur, opts) => '<div class="seg">'+opts.map(([v,l])=>'<button data-'+attr+'="'+v+'" class="'+(v===cur?"sel":"")+'">'+l+'</button>').join("")+'</div>';
   const cats = Object.keys(CATN).map(c=>'<span><i style="background:'+CATC[c]+'"></i>'+CATN[c]+'</span>').join("");
-  const kinds = [["local","LAN"],["public","internet"],["cgnat","CGNAT/tailnet"],["multicast","multicast/bcast"]].map(([k,l])=>'<span><b style="background:'+KINDC[k]+'"></b>'+l+'</span>').join("");
+  const kinds = [["lan","LAN / localhost"],["vpn","internal / VPN"],["pub","public"]].map(([k,l])=>'<span><b style="background:'+ACLR[k]+'"></b>'+l+'</span>').join("");
   return '<div class="sect gsect"><h3>IP relationships <span class="sub">line width = occurrences seen, 1px (least) → 6px (most) · scroll to zoom · drag background to pan · double-click to reset · click node = filter · right-click node = whois</span></h3>'
     + '<div class="gctl">'+seg("gm",S.gm,[["packets","packets"],["conns","conversations"],["bytes","bytes"]])
     + seg("gs",S.gs,[["log","log"],["linear","linear"]])
@@ -490,10 +543,10 @@ function drawGraph(){
   nodes.forEach(n => {
     const show = labelled.has(n.id) ? "" : " hide", sub = n.name || n.org || "";
     s += '<g class="nd" data-n="'+esc(n.id)+'">'
-      + '<circle r="'+n.r.toFixed(1)+'" fill="'+(KINDC[n.kind]||KINDC.other)+'"/>'
-      + '<text class="'+show+'" x="'+(n.r+4).toFixed(1)+'" y="3">'+esc(n.id)+'</text>'
+      + '<circle r="'+n.r.toFixed(1)+'" fill="'+ACLR[ipClass(n.id)]+'"/>'
+      + '<text class="a-'+ipClass(n.id)+show+'" x="'+(n.r+4).toFixed(1)+'" y="3">'+esc(n.id)+'</text>'
       + (sub ? '<text class="sub'+(n.name?"":" org")+show+'" x="'+(n.r+4).toFixed(1)+'" y="14">'+esc(sub.length>34?sub.slice(0,33)+"…":sub)+'</text>' : "")
-      + '<title>'+esc(n.id+(n.name?"\n"+n.name:"")+(n.org?"\norg: "+n.org:"")+"\n"+n.kind+" · "+num(n.packets)+" pkts · "+bytes(n.bytes)+" · "+adj[n.id].length+" peers"+(isPublic(n.id)?"\nright-click: whois":""))+'</title></g>'; });
+      + '<title>'+esc(n.id+(n.name?"\n"+n.name:"")+(n.org?"\norg: "+n.org:"")+"\n"+({lan:"LAN/localhost",vpn:"internal/VPN",pub:"public"})[ipClass(n.id)]+" · "+num(n.packets)+" pkts · "+bytes(n.bytes)+" · "+adj[n.id].length+" peers"+(isPublic(n.id)?"\nright-click: whois":""))+'</title></g>'; });
   box.innerHTML = s + '</svg><div class="zbar"><button data-gz="in" title="zoom in">+</button><button data-gz="out" title="zoom out">−</button><button data-gz="reset" title="reset view">fit</button><span id="zlab"></span></div>';
 
   const svg = box.querySelector("svg"), lines = svg.querySelectorAll("line"), gEls = {};
@@ -584,6 +637,7 @@ async function tick(force){
   try{
     const [st, ss] = await Promise.all([api("/api/status"), api("/api/sessions")]);
     S.status = st; S.sessions = ss.sessions;
+    if(setLan(st.lan)) force = true;
     if(S.sel == null && S.sessions.length) S.sel = S.sessions[0].id;
     renderStatus(); renderSessions();
     const selLive = S.sessions.find(s=>s.id===S.sel)?.status === "running";

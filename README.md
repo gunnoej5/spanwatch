@@ -25,6 +25,12 @@ in a small local dashboard:
   the RDAP JSON, ARIN search, and bgp.he.net. Looked-up orgs then label talkers and
   graph nodes.
 - **Traffic guesses** for encrypted/opaque flows (see below).
+- **Address colours** are the same everywhere (tables, breakdown, graph):
+  green for the local LAN, localhost, link-local, and multicast; orange for other
+  internal space (VPN/Tailscale CGNAT 100.64/10, RFC1918 outside the LAN, IPv6
+  ULA, Docker); red for public. "Local LAN" is the subnet of whichever interface
+  holds the default route, detected automatically. Add more with
+  `SPANWATCH_ARGS=--lan 10.20.0.0/16` (repeatable).
 - Export CSV, plus DNS as plain text.
 
 There are no third-party dependencies, only Python 3 stdlib. Capture uses

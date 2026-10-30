@@ -27,7 +27,7 @@ class ApiError(Exception):
 
 class App:
     def __init__(self, store, iface, dns_ports=(53,), max_duration=3600,
-                 keep=50, allow_addressed=False, whois=None):
+                 keep=50, allow_addressed=False, whois=None, lan=()):
         self.store = store
         self.iface = iface
         self.dns_ports = tuple(dns_ports)
@@ -35,6 +35,8 @@ class App:
         self.keep = keep
         self.allow_addressed = allow_addressed
         self.whois = whois if whois is not None else Whois(store, enabled=False)
+        self.lan_extra = list(lan)
+        self._lan = (0.0, [])
         self.current = None
         self.capture = None
         self.lock = threading.Lock()
@@ -109,6 +111,13 @@ class App:
         live = self._live(sid)
         return live.dns_rows() if live else self.store.dns(sid)
 
+    def lan(self):
+        ts, nets = self._lan
+        if time.time() - ts > 60:
+            nets = list(dict.fromkeys(self.lan_extra + ifmod.lan_networks()))
+            self._lan = (time.time(), nets)
+        return nets
+
     def status(self):
         cur = self.current
         st = ifmod.status(self.iface)
@@ -116,7 +125,7 @@ class App:
             "iface": st, "receive_only": ifmod.receive_only(st),
             "current": cur.summary() if cur else None,
             "max_duration": self.max_duration, "dns_ports": list(self.dns_ports),
-            "whois": self.whois.enabled,
+            "whois": self.whois.enabled, "lan": self.lan(),
             "host": os.uname().nodename, "now": time.time(),
         }
 

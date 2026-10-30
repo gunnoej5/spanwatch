@@ -66,3 +66,33 @@ def status(iface):
 def receive_only(st):
     """True when the port looks safely passive (no addresses at all)."""
     return bool(st.get("present")) and st.get("addresses") == []
+
+
+def parse_lan(addr_json, route_json):
+    """CIDRs of interfaces that carry a default route (the real LAN uplink).
+    Link-local prefixes are skipped; the UI treats those as local anyway."""
+    import ipaddress
+    uplinks = {r.get("dev") for r in route_json if r.get("dev")}
+    nets = []
+    for link in addr_json:
+        if link.get("ifname") not in uplinks:
+            continue
+        for a in link.get("addr_info", []):
+            try:
+                n = ipaddress.ip_interface("%s/%s" % (a.get("local"), a.get("prefixlen"))).network
+            except ValueError:
+                continue
+            if not n.is_link_local and str(n) not in nets:
+                nets.append(str(n))
+    return nets
+
+
+def lan_networks():
+    def j(*args):
+        try:
+            out = subprocess.run(["ip", "-j"] + list(args), capture_output=True, text=True, timeout=3)
+            return json.loads(out.stdout or "[]")
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            return []
+    routes = j("-4", "route", "show", "default") + j("-6", "route", "show", "default")
+    return parse_lan(j("addr", "show"), routes)

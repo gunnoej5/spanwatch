@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS sessions (
 CREATE TABLE IF NOT EXISTS flows (
   session_id INTEGER, client TEXT, server TEXT, proto TEXT, port INTEGER,
   service TEXT, pkts_cs INTEGER, bytes_cs INTEGER, pkts_sc INTEGER,
-  bytes_sc INTEGER, first REAL, last REAL, client_name TEXT, server_name TEXT
+  bytes_sc INTEGER, first REAL, last REAL, client_name TEXT, server_name TEXT,
+  guess TEXT, conf INTEGER, detail TEXT
 );
 CREATE INDEX IF NOT EXISTS flows_sid ON flows(session_id);
 CREATE TABLE IF NOT EXISTS dns (
@@ -26,7 +27,7 @@ CREATE INDEX IF NOT EXISTS dns_sid ON dns(session_id);
 
 FLOW_COLS = ("client", "server", "proto", "port", "service", "pkts_cs",
              "bytes_cs", "pkts_sc", "bytes_sc", "first", "last",
-             "client_name", "server_name")
+             "client_name", "server_name", "guess", "conf", "detail")
 DNS_COLS = ("ts", "client", "resolver", "qname", "qtype", "rcode", "answers",
             "ms", "ttl")
 SUMMARY_COLS = ("id", "iface", "note", "started", "ended", "duration",
@@ -39,6 +40,10 @@ class Store:
         self.db = sqlite3.connect(path, check_same_thread=False)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        have = {r[1] for r in self.db.execute("PRAGMA table_info(flows)")}
+        for col, typ in (("guess", "TEXT"), ("conf", "INTEGER"), ("detail", "TEXT")):
+            if col not in have:
+                self.db.execute("ALTER TABLE flows ADD COLUMN %s %s" % (col, typ))
         self.lock = threading.Lock()
 
     def next_id(self):
@@ -59,10 +64,12 @@ class Store:
             self.db.execute("DELETE FROM flows WHERE session_id=?", (sess.id,))
             self.db.execute("DELETE FROM dns WHERE session_id=?", (sess.id,))
             self.db.executemany(
-                "INSERT INTO flows VALUES (?,%s)" % ",".join("?" * len(FLOW_COLS)),
+                "INSERT INTO flows (session_id,%s) VALUES (?,%s)"
+                % (",".join(FLOW_COLS), ",".join("?" * len(FLOW_COLS))),
                 ([sess.id] + [f[c] for c in FLOW_COLS] for f in flows))
             self.db.executemany(
-                "INSERT INTO dns VALUES (?,%s)" % ",".join("?" * len(DNS_COLS)),
+                "INSERT INTO dns (session_id,%s) VALUES (?,%s)"
+                % (",".join(DNS_COLS), ",".join("?" * len(DNS_COLS))),
                 ([sess.id] + [json.dumps(d[c]) if c == "answers" else d[c]
                               for c in DNS_COLS] for d in dns))
 

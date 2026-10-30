@@ -9,8 +9,14 @@ in a small local dashboard:
   labelled with names learned from DNS answers in the same session (passive DNS).
 - **DNS log**: one line per query: `requestor → provider  TYPE name = answers  (rcode, ms)`.
   Unanswered queries are logged as `NO-RESPONSE`.
-- **Breakdown**: top talkers, protocols, services, DNS names, requestors, providers,
-  rcodes, and non-IP frames (ARP, LLDP, …).
+- **Breakdown**: top talkers, protocols, services, traffic guesses, DNS names,
+  requestors, providers, rcodes, and non-IP frames (ARP, LLDP, …).
+- **IP relationship graph** (under Breakdown): an undirected force layout of IP pairs.
+  Line width runs from 1px (seen least) to 6px (seen most). Choose packets,
+  conversations, or bytes, on a log or linear scale. Line colour shows the
+  traffic guess, node colour shows the address class, and node size shows volume.
+  Hover a node to highlight its peers, click it to filter on it, or drag it.
+- **Traffic guesses** for encrypted/opaque flows (see below).
 - Export CSV, plus DNS as plain text.
 
 There are no third-party dependencies, only Python 3 stdlib. Capture uses
@@ -19,6 +25,22 @@ There are no third-party dependencies, only Python 3 stdlib. Capture uses
 ```
 2026-10-30 12:01:02  192.168.1.50 -> 192.168.1.1  A www.example.com = CNAME edge.example.net, 93.184.216.34  (NOERROR 12ms)
 ```
+
+## Traffic guesses
+
+Each conversation's first 8 payload packets are inspected. Every new TCP
+connection in that conversation gets 5 more probes. Guesses carry a confidence:
+
+| conf | UI | Evidence |
+|---|---|---|
+| 3 | filled badge | protocol signature: SSH banner, TLS ClientHello (**SNI** extracted, split hellos reassembled), QUIC long header, WireGuard handshake, OpenVPN hard-reset, BitTorrent handshake/DHT/UDP tracker, STUN, RDP, VNC, HTTP (Host extracted), ESP/AH |
+| 2 | outline | structural or behavioural: TLS records mid-stream, WireGuard transport packets, unknown high-port traffic from a host already seen speaking BitTorrent |
+| 1 | dashed, `?` | heuristic: well-known port, high-entropy payload (`encrypted?`), uTP-like headers, P2P fan-out (≥20 peers) or fan-in (≥10 clients) on unknown high ports |
+
+These are guesses. Known blind spots: VPNs over TLS/443 (SSTP, OpenConnect)
+look like TLS. OpenVPN with `tls-auth`/`tls-crypt` lacks a signature and falls
+back to port. Encrypted BitTorrent (MSE) is only caught by behaviour. QUIC SNI
+is not decrypted.
 
 ## Receive-only by design
 

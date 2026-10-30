@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 from . import iface as ifmod
+from .classify import infer, graph as build_graph
 from .capture import LiveCapture
 from .session import Session
 
@@ -100,7 +101,7 @@ class App:
 
     def flows(self, sid):
         live = self._live(sid)
-        return live.flow_rows() if live else self.store.flows(sid)
+        return infer(live.flow_rows() if live else self.store.flows(sid))
 
     def dns(self, sid):
         live = self._live(sid)
@@ -136,7 +137,7 @@ def filter_flows(rows, q="", sort="bytes", limit=500):
     if q:
         rows = [f for f in rows if _match(q, f["client"], f["server"], f["proto"],
                                           f["port"], f["service"], f["client_name"],
-                                          f["server_name"])]
+                                          f["server_name"], f["guess"], f["detail"])]
     key = FLOW_SORTS.get(sort, FLOW_SORTS["bytes"])
     rows.sort(key=key, reverse=sort not in ("port",))
     return len(rows), rows[:limit]
@@ -175,6 +176,10 @@ def insights(flows, dns, n=12):
         if f["service"]:
             label += " " + f["service"]
         svc[label] += f["bytes_cs"] + f["bytes_sc"]
+    guesses = Counter()
+    for f in flows:
+        if f.get("guess"):
+            guesses[f["guess"] + ("?" if f["conf"] <= 1 else "")] += f["bytes_cs"] + f["bytes_sc"]
     qn, clients, resolvers, rcodes = Counter(), Counter(), Counter(), Counter()
     for d in dns:
         qn[d["qname"]] += 1
@@ -185,14 +190,14 @@ def insights(flows, dns, n=12):
     return {
         "talkers": [{"key": k, "value": v, "name": names.get(k, "")}
                     for k, v in talk.most_common(n)],
-        "services": top(svc), "qnames": top(qn), "dns_clients": top(clients),
+        "services": top(svc), "guesses": top(guesses), "qnames": top(qn), "dns_clients": top(clients),
         "resolvers": top(resolvers), "rcodes": top(rcodes),
     }
 
 
 # ---------------------------------------------------------------- HTTP
 
-ROUTE = re.compile(r"^/api/sessions/(\d+)(?:/(flows|dns|summary|flows\.csv|dns\.csv|dns\.txt))?$")
+ROUTE = re.compile(r"^/api/sessions/(\d+)(?:/(flows|dns|graph|summary|flows\.csv|dns\.csv|dns\.txt))?$")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -299,6 +304,11 @@ class Handler(BaseHTTPRequestHandler):
             app.summary(sid)
             total, rows = filter_flows(app.flows(sid), q, qs.get("sort", "bytes"), limit)
             return self._send(200, {"total": total, "rows": rows})
+        if what == "graph":
+            app.summary(sid)
+            _, rows = filter_flows(app.flows(sid), q, "pkts", 10**9)
+            glimit = max(1, min(int(qs.get("limit", 150)), 400))
+            return self._send(200, build_graph(rows, glimit))
         if what == "dns":
             app.summary(sid)
             total, rows = filter_dns(app.dns(sid), q, limit)
@@ -316,7 +326,8 @@ class Handler(BaseHTTPRequestHandler):
         if what == "flows.csv":
             _, rows = filter_flows(app.flows(sid), q, qs.get("sort", "bytes"), 10**9)
             cols = ["client", "client_name", "server", "server_name", "proto", "port",
-                    "service", "pkts_cs", "bytes_cs", "pkts_sc", "bytes_sc", "first", "last"]
+                    "service", "guess", "conf", "detail", "pkts_cs", "bytes_cs", "pkts_sc",
+                    "bytes_sc", "first", "last"]
         else:
             _, rows = filter_dns(app.dns(sid), q, 10**9)
             rows = rows[::-1]

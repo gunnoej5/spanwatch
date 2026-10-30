@@ -11,12 +11,15 @@ from collections import Counter
 from .parse import (KIND_IP, KIND_L2, ETHERTYPES, PROTO_NAMES, SERVICES,
                     TCP_SYN, TCP_ACK, parse_frame, parse_dns, qtype_name,
                     RCODES, service_name)
+from .classify import classify_payload
 
 MAX_FLOWS = 250_000
 MAX_DNS = 100_000
 MAX_SERVERS = 200_000
 MAX_NAMES = 200_000
 DNS_TIMEOUT = 5.0
+PROBES = 8          # payload packets inspected per conversation
+MAX_PARTIAL = 10_000
 
 
 def _rank(port):
@@ -43,7 +46,9 @@ class Session:
         self.error = None
         self.saved = False
         self.lock = threading.Lock()
-        self.flows = {}      # key -> [pk_cs, by_cs, pk_sc, by_sc, first, last]
+        # key -> [pk_cs, by_cs, pk_sc, by_sc, first, last, guess, conf, detail, probes]
+        self.flows = {}
+        self.partial = {}     # TCP 4-tuple -> buffered split TLS ClientHello
         self.servers = set()  # (ip, proto, port) seen answering a SYN
         self.dns_pending = {}  # (client, cport, resolver, txid) -> query info
         self.dns = []
@@ -111,16 +116,21 @@ class Session:
                 if len(self.flows) >= MAX_FLOWS:
                     self.truncated_flows += 1
                 else:
-                    self.flows[key] = ([1, length, 0, 0, ts, ts] if fwd
-                                       else [0, 0, 1, length, ts, ts])
-            elif fwd:
-                f[0] += 1
-                f[1] += length
+                    f = self.flows[key] = [0, 0, 0, 0, ts, ts, "", 0, "", 0]
+            if f is not None:
+                if fwd:
+                    f[0] += 1
+                    f[1] += length
+                else:
+                    f[2] += 1
+                    f[3] += length
                 f[5] = ts
-            else:
-                f[2] += 1
-                f[3] += length
-                f[5] = ts
+                if f[7] < 3:
+                    # a fresh connection in this conversation earns new probes
+                    if proto == 6 and flags & TCP_SYN and not flags & TCP_ACK:
+                        f[9] = min(f[9], PROBES - 3)
+                    if pend > poff and f[9] < PROBES:
+                        self._probe(f, buf, poff, pend, src, sport, dst, dport, proto)
 
             # --- DNS
             if poff and (sport in self.dns_ports or dport in self.dns_ports):
@@ -131,6 +141,25 @@ class Session:
 
             if ts - self._last_expire > 1.0:
                 self._expire_dns(ts)
+
+    def _probe(self, f, buf, poff, pend, src, sport, dst, dport, proto):
+        f[9] += 1
+        pay = bytes(buf[poff:min(pend, poff + 2048)])
+        k5 = None
+        if proto == 6:
+            k5 = (src, sport, dst, dport)
+            prev = self.partial.pop(k5, None)
+            if prev:
+                pay = prev + pay
+        g = classify_payload(pay, proto, sport, dport)
+        if g is None:
+            return
+        tag, conf, detail, more = g
+        if more and k5 and len(pay) < 16384 and len(self.partial) < MAX_PARTIAL:
+            self.partial[k5] = pay
+            f[9] -= 1
+        if conf > f[7] or (conf == f[7] and detail and not f[8]):
+            f[6], f[7], f[8] = tag, conf, detail
 
     def _dns(self, src, sport, dst, dport, msg, ts):
         d = parse_dns(msg)
@@ -219,11 +248,16 @@ class Session:
 
 def flow_row(k, v, names):
     client, server, proto, port = k
+    detail = v[8]
+    sname = names.get(server, "")
+    if not sname and detail[:4] in ("sni ", "host"):
+        sname = detail.split(" ", 1)[1] if " " in detail else ""
     return {
         "client": client, "server": server,
         "proto": PROTO_NAMES.get(proto, "IP/%d" % proto),
         "port": port, "service": service_name(proto, port),
         "pkts_cs": v[0], "bytes_cs": v[1], "pkts_sc": v[2], "bytes_sc": v[3],
         "first": v[4], "last": v[5],
-        "client_name": names.get(client, ""), "server_name": names.get(server, ""),
+        "client_name": names.get(client, ""), "server_name": sname,
+        "guess": v[6], "conf": v[7], "detail": detail,
     }

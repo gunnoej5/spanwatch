@@ -114,3 +114,19 @@ def sample_frames():
     # garbage
     fr.append(b"\x01\x02")
     return fr
+
+
+def client_hello(sni, pad=0):
+    name = sni.encode()
+    sni_ext = struct.pack("!HHHBH", 0, len(name) + 5, len(name) + 3, 0, len(name)) + name
+    exts = struct.pack("!HH", 0x0015, pad) + b"\0" * pad + sni_ext
+    body = (b"\x03\x03" + b"\x11" * 32 + b"\x00" + b"\x00\x02\x13\x01" + b"\x01\x00"
+            + struct.pack("!H", len(exts)) + exts)
+    hs = b"\x01" + len(body).to_bytes(3, "big") + body
+    return b"\x16\x03\x01" + struct.pack("!H", len(hs)) + hs
+
+
+def rnd(n, seed=1):
+    import random
+    r = random.Random(seed)
+    return bytes(r.getrandbits(8) for _ in range(n))

@@ -115,6 +115,28 @@ td.r,th.r{text-align:right}
 .gsvg.focus line{opacity:.06}.gsvg.focus line.hi{opacity:1}
 .gsvg.focus .nd{opacity:.2}.gsvg.focus .nd.hi{opacity:1}
 .gsvg.focus .nd.hi text.hide{display:inline}
+.gsvg{cursor:grab;touch-action:none}.gsvg.panning{cursor:grabbing}
+.gsvg.zin text.hide{display:inline}
+.gsvg text.sub.org{fill:#9b8a5e}
+.gsvg line{vector-effect:non-scaling-stroke}
+.zbar{position:absolute;right:10px;top:10px;display:flex;align-items:center;border:1px solid var(--line2);background:rgba(13,17,20,.92)}
+.zbar button{background:none;border:0;border-right:1px solid var(--line2);color:var(--dim);font:inherit;font-size:12px;padding:3px 9px;cursor:pointer}
+.zbar button:hover{color:var(--sig)}
+.zbar span{padding:0 8px;color:var(--faint);font-size:11px;min-width:44px;text-align:right}
+.wi{background:none;border:0;color:var(--dim);cursor:pointer;font:inherit;font-size:11px;padding:0 4px;vertical-align:baseline}
+.wi:hover{color:var(--blue)}
+.svc.org{color:#9b8a5e}
+#wpanel{position:fixed;top:47px;right:0;bottom:0;width:400px;max-width:100vw;background:rgba(13,17,20,.97);border-left:1px solid var(--line2);z-index:8;overflow:auto;box-shadow:-20px 0 40px rgba(0,0,0,.45);animation:slidein .18s ease-out}
+@keyframes slidein{from{transform:translateX(30px);opacity:0}}
+#wpanel .wh{display:flex;align-items:center;gap:6px;padding:10px 14px;border-bottom:1px solid var(--line2);position:sticky;top:0;background:var(--panel)}
+#wpanel .wh b{color:var(--sig);font-weight:600}
+.whead{padding:12px 14px 4px;font:600 15px var(--sans);color:var(--text)}
+.wt{margin:4px 0 8px}
+.wt th{position:static;background:none;border:0;padding:3px 8px 3px 14px;vertical-align:top;width:92px}
+.wt td{border:0;white-space:normal;word-break:break-word;padding:3px 14px 3px 0}
+.wlinks{display:flex;gap:12px;padding:6px 14px 10px}
+.wlinks a{font-size:11px}
+.wfoot{color:var(--faint);font-size:10px;padding:10px 14px;border-top:1px solid var(--line)}
 .err{position:fixed;bottom:14px;right:14px;background:var(--red-d);border:1px solid var(--red);color:#ffd6d6;padding:8px 12px;max-width:520px;z-index:9}
 .hint{color:var(--faint);font-size:11px;padding:0 14px 12px}
 @media (max-width:900px){.wrap{grid-template-columns:1fr}aside{display:none}.meter{grid-template-columns:repeat(3,1fr)}}
@@ -156,12 +178,21 @@ td.r,th.r{text-align:right}
 </main>
 </div>
 <div class="err" id="err" hidden></div>
+<div id="wpanel" hidden>
+  <div class="wh"><b id="wip"></b><span class="spacer"></span>
+    <button class="btn ghost" id="wfil" title="filter the session on this IP">filter</button>
+    <button class="btn ghost" id="wref" title="bypass the 7-day cache">refresh</button>
+    <button class="btn ghost" id="wx" title="close (Esc)">✕</button></div>
+  <div id="wbody"></div>
+  <div class="wfoot">Looked up only when you ask, public IPs only: RDAP via rdap.arin.net (redirects to the owning RIR) + Team Cymru IP→ASN. Cached 7 days.</div>
+</div>
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
 const DUR = [[30,"30s"],[120,"2m"],[300,"5m"],[900,"15m"],[3600,"60m"]];
 const S = {dur: 120, sel: null, tab: "flows", sort: "bytes", q: "", status: null, sessions: [], timer: null,
-  gm: "packets", gs: "log", pos: {}, gdata: null, drag: null, posFor: null};
+  gm: "packets", gs: "log", pos: {}, gdata: null, drag: null, posFor: null,
+  zoom: {k:1, tx:0, ty:0}, gplace: null, gW: 800, gH: 500, wip: null};
 const CAT = {wireguard:"vpn",openvpn:"vpn",ipsec:"vpn","pptp-vpn":"vpn","l2tp-vpn":"vpn",gre:"vpn",
   ssh:"remote",rdp:"remote",vnc:"remote",tls:"web",quic:"web","dns-over-tls":"web",
   bittorrent:"p2p","bittorrent-dht":"p2p",p2p:"p2p",stun:"rtc",http:"plain",encrypted:"unk"};
@@ -170,6 +201,56 @@ const CATN = {vpn:"vpn/tunnel",remote:"ssh/remote",web:"tls/quic",p2p:"torrent/p
 const KINDC = {local:"#5cf2a6",public:"#ff8a5c",cgnat:"#ffb547",multicast:"#6f7f87",loopback:"#6cb6ff",other:"#6f7f87"};
 const catOf = g => CAT[String(g||"").replace(/\?$/,"")] || (g ? "unk" : "none");
 const CONFN = ["","heuristic (port/entropy/behaviour)","strong hint","protocol signature"];
+function isPublic(ip){
+  ip = String(ip||"").toLowerCase();
+  if(ip.includes(":")) return /^[23]/.test(ip) && !ip.startsWith("2001:db8");
+  const p = ip.split(".").map(Number); if(p.length!==4 || p.some(isNaN)) return false;
+  const [a,b,c] = p;
+  return !(a===0||a===10||a===127||a>=224||(a===169&&b===254)||(a===172&&b>=16&&b<=31)||(a===192&&b===168)
+    ||(a===100&&b>=64&&b<=127)||(a===192&&b===0&&c===2)||(a===198&&(b===18||b===19))||(a===198&&b===51&&c===100)||(a===203&&b===0&&c===113));
+}
+const wiBtn = ip => (S.status?.whois && isPublic(ip)) ? '<button class="wi" data-whois="'+esc(ip)+'" title="whois / ARIN">ⓘ</button>' : "";
+async function openWhois(ip, refresh){
+  S.wip = ip; $("#wpanel").hidden = false; $("#wip").textContent = ip;
+  $("#wbody").innerHTML = '<div class="hint" style="padding:14px">querying registries…</div>';
+  try{
+    const d = await api("/api/whois?ip="+encodeURIComponent(ip)+(refresh?"&refresh=1":""), {headers:{"X-Spanwatch-Action":"1"}});
+    if(S.wip !== ip) return;
+    $("#wbody").innerHTML = whoisHtml(d);
+    if(!d.cached && S.tab === "mix") loadView(true);   // pick up the new org label
+  }catch(e){ if(S.wip === ip) $("#wbody").innerHTML = '<div class="hint" style="padding:14px;color:var(--amber)">'+esc(e.message)+'</div>'; }
+}
+function whoisHtml(d){
+  const r = d.rdap||{}, a = d.asn||{};
+  const row = (k,v) => v ? '<tr><th>'+k+'</th><td>'+v+'</td></tr>' : "";
+  const ext = (href, txt) => '<a target="_blank" rel="noopener noreferrer" href="'+esc(href)+'">'+txt+'</a>';
+  return '<div class="whead">'+esc(d.short||r.name||"no registry match")+'</div><table class="wt">'
+    + row("org", esc(r.org))
+    + row("network", esc([r.name, r.handle].filter(Boolean).join(" · ")))
+    + row("range", esc(r.range))
+    + row("cidr", esc((r.cidrs||[]).join(", ")))
+    + row("asn", a.asn ? 'AS'+a.asn+' <span class="svc">'+esc(a.as_name)+'</span>' : "")
+    + row("bgp prefix", esc(a.bgp_prefix))
+    + row("country", esc(r.country||a.cc))
+    + row("registry", esc(r.rir||a.registry))
+    + row("type", esc(r.type))
+    + row("parent", esc(r.parent))
+    + row("abuse", r.abuse ? '<a href="mailto:'+esc(r.abuse)+'">'+esc(r.abuse)+'</a>' : "")
+    + row("registered", esc(r.registered||a.allocated))
+    + row("updated", esc(r.updated))
+    + '</table><div class="wlinks">'
+    + (r.rdap_url ? ext(r.rdap_url, "rdap json") : "")
+    + ext("https://search.arin.net/rdap/?query="+encodeURIComponent(d.ip), "arin search")
+    + (a.asn ? ext("https://bgp.he.net/AS"+a.asn, "bgp.he.net") : "")
+    + '</div>'
+    + ((d.errors||[]).length ? '<div class="hint" style="color:var(--amber)">'+esc(d.errors.join("; "))+'</div>' : "")
+    + '<div class="hint">'+(d.cached ? "cached · looked up "+dfmt(d.ts) : "fresh lookup")+'</div>';
+}
+$("#wx").onclick = () => { $("#wpanel").hidden = true; S.wip = null; };
+$("#wref").onclick = () => S.wip && openWhois(S.wip, true);
+$("#wfil").onclick = () => { if(!S.wip) return; $("#q").value = S.wip; S.q = S.wip; loadView(true); };
+document.addEventListener("keydown", e => { if(e.key === "Escape" && !$("#wpanel").hidden) $("#wx").onclick(); });
+
 function guessCell(f){
   if(!f.guess) return '<span class="dir">—</span>';
   const lab = f.guess + (f.conf<=1 ? "?" : "");
@@ -269,12 +350,15 @@ $("#del").onclick = async () => {
   if(S.sel==null || !confirm("Delete session #"+S.sel+"?")) return;
   try{ await api("/api/sessions/"+S.sel, {method:"DELETE", headers:{"X-Spanwatch-Action":"1"}}); S.sel=null; await tick(true) }catch(e){ oops(e.message) }
 };
-function ipCell(ip, name){ return '<span class="ip" data-ip="'+esc(ip)+'">'+esc(ip)+'</span>'+(name?'<span class="nm" title="'+esc(name)+'">'+esc(name)+'</span>':"") }
+function ipCell(ip, name){ return '<span class="ip" data-ip="'+esc(ip)+'">'+esc(ip)+'</span>'+wiBtn(ip)+(name?'<span class="nm" title="'+esc(name)+'">'+esc(name)+'</span>':"") }
 $("#view").onclick = e => {
+  const w = e.target.closest("[data-whois]"); if(w){ openWhois(w.dataset.whois); return; }
+  const z = e.target.closest("[data-gz]");
+  if(z){ if(z.dataset.gz === "reset"){ Object.assign(S.zoom, {k:1,tx:0,ty:0}); S.gplace && S.gplace(); } else zoomBy(z.dataset.gz === "in" ? 1.4 : 1/1.4); return; }
   const ip = e.target.dataset?.ip; if(ip){ $("#q").value = ip; S.q = ip; loadView(true); return; }
   const s = e.target.closest("th[data-sort]"); if(s){ S.sort = s.dataset.sort; loadView(true); return; }
   const b = e.target.closest("[data-gm],[data-gs],[data-relayout]");
-  if(b){ if(b.dataset.gm) S.gm=b.dataset.gm; if(b.dataset.gs) S.gs=b.dataset.gs; if(b.dataset.relayout!=null) S.pos={};
+  if(b){ if(b.dataset.gm) S.gm=b.dataset.gm; if(b.dataset.gs) S.gs=b.dataset.gs; if(b.dataset.relayout!=null){ S.pos={}; Object.assign(S.zoom, {k:1,tx:0,ty:0}); }
     document.querySelectorAll("[data-gm]").forEach(x=>x.classList.toggle("sel", x.dataset.gm===S.gm));
     document.querySelectorAll("[data-gs]").forEach(x=>x.classList.toggle("sel", x.dataset.gs===S.gs));
     drawGraph(); }
@@ -312,13 +396,13 @@ function mixView(d){
   const b = d.breakdown || {}, i = d.insights || {};
   const protos = (b.protos||[]).map(p=>({key:p.proto, value:p.bytes, pk:p.packets}));
   return '<div class="grid">'
-    + hist("Top talkers (bytes)", i.talkers, bytes, "", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>'+(r.name?' <span class="svc">'+esc(r.name)+'</span>':""))
+    + hist("Top talkers (bytes)", i.talkers, bytes, "", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>'+wiBtn(r.key)+(r.name?' <span class="svc">'+esc(r.name)+'</span>':r.org?' <span class="svc org">'+esc(r.org)+'</span>':""))
     + hist("Protocols (bytes)", protos, bytes)
     + hist("Services (bytes)", i.services, bytes)
     + hist("Traffic guesses (bytes)", i.guesses, bytes, "", r => '<span class="g conf'+(r.key.endsWith("?")?1:3)+'" style="--c:'+CATC[catOf(r.key)]+'">'+esc(r.key)+'</span>')
     + hist("DNS names (queries)", i.qnames, num, "amber")
-    + hist("DNS requestors", i.dns_clients, num, "amber", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>')
-    + hist("DNS providers", i.resolvers, num, "amber", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>')
+    + hist("DNS requestors", i.dns_clients, num, "amber", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>'+wiBtn(r.key))
+    + hist("DNS providers", i.resolvers, num, "amber", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>'+wiBtn(r.key))
     + hist("DNS rcodes", i.rcodes, num, "amber")
     + hist("Non-IP frames", (b.l2||[]).map(x=>({key:x.ethertype,value:x.frames})), num)
     + '</div>' + graphShell();
@@ -329,7 +413,7 @@ function graphShell(){
   const seg = (attr, cur, opts) => '<div class="seg">'+opts.map(([v,l])=>'<button data-'+attr+'="'+v+'" class="'+(v===cur?"sel":"")+'">'+l+'</button>').join("")+'</div>';
   const cats = Object.keys(CATN).map(c=>'<span><i style="background:'+CATC[c]+'"></i>'+CATN[c]+'</span>').join("");
   const kinds = [["local","LAN"],["public","internet"],["cgnat","CGNAT/tailnet"],["multicast","multicast/bcast"]].map(([k,l])=>'<span><b style="background:'+KINDC[k]+'"></b>'+l+'</span>').join("");
-  return '<div class="sect gsect"><h3>IP relationships <span class="sub">line width = occurrences seen, 1px (least) → 6px (most) · click a node to focus it · drag to arrange</span></h3>'
+  return '<div class="sect gsect"><h3>IP relationships <span class="sub">line width = occurrences seen, 1px (least) → 6px (most) · scroll to zoom · drag background to pan · double-click to reset · click node = filter · right-click node = whois</span></h3>'
     + '<div class="gctl">'+seg("gm",S.gm,[["packets","packets"],["conns","conversations"],["bytes","bytes"]])
     + seg("gs",S.gs,[["log","log"],["linear","linear"]])
     + '<button class="btn ghost" data-relayout="1">re-layout</button>'
@@ -370,11 +454,22 @@ function layout(nodes, edges, idx, W, H){
   for(const n of nodes) S.pos[n.id] = {x:n.x/W, y:n.y/H};
 }
 
+function zoomBy(f, px, py){
+  const Z = S.zoom;
+  if(px == null){ px = S.gW/2; py = S.gH/2; }
+  const k2 = Math.max(0.3, Math.min(12, Z.k*f)); f = k2/Z.k;
+  Z.tx = px - (px - Z.tx)*f; Z.ty = py - (py - Z.ty)*f; Z.k = k2;
+  if(S.gplace) S.gplace();
+}
+
 function drawGraph(){
   const box = $("#graph"), d = S.gdata;
   if(!box || !d) return;
+  S.gplace = null;
   if(!d.edges.length){ box.innerHTML = '<div class="empty">no IP pairs'+(S.q?" match":" yet")+'</div>'; return; }
   const W = Math.max(box.clientWidth, 600), H = Math.round(Math.max(440, Math.min(820, 300 + d.nodes.length*4)));
+  S.gW = W; S.gH = H;
+  const Z = S.zoom;
   const val = e => S.gm==="bytes" ? e.bytes : S.gm==="conns" ? e.flows : e.packets;
   const sc = S.gs==="log" ? (x => Math.log(Math.max(x,1))) : (x => x);
   const vs = d.edges.map(val), lo = sc(Math.min(...vs)), hi = sc(Math.max(...vs));
@@ -389,39 +484,66 @@ function drawGraph(){
   layout(nodes, edges, idx, W, H);
   const metricTxt = e => num(e.packets)+" pkts · "+bytes(e.bytes)+" · "+e.flows+" conversation"+(e.flows===1?"":"s");
   let s = '<svg class="gsvg" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">';
-  edges.forEach((e,i) => { const a=idx[e.a], b=idx[e.b];
-    s += '<line data-e="'+i+'" x1="'+a.x.toFixed(1)+'" y1="'+a.y.toFixed(1)+'" x2="'+b.x.toFixed(1)+'" y2="'+b.y.toFixed(1)+'" stroke="'+CATC[catOf(e.guess)]+'" stroke-width="'+e.w.toFixed(2)+'">'
+  edges.forEach((e,i) => {
+    s += '<line data-e="'+i+'" stroke="'+CATC[catOf(e.guess)]+'" stroke-width="'+e.w.toFixed(2)+'">'
       + '<title>'+esc(e.a+"  ⇄  "+e.b+"\n"+metricTxt(e)+"\n"+e.labels.join("\n"))+'</title></line>'; });
-  nodes.forEach(n => { const show = labelled.has(n.id) ? "" : " hide";
-    s += '<g class="nd" data-n="'+esc(n.id)+'" transform="translate('+n.x.toFixed(1)+','+n.y.toFixed(1)+')">'
+  nodes.forEach(n => {
+    const show = labelled.has(n.id) ? "" : " hide", sub = n.name || n.org || "";
+    s += '<g class="nd" data-n="'+esc(n.id)+'">'
       + '<circle r="'+n.r.toFixed(1)+'" fill="'+(KINDC[n.kind]||KINDC.other)+'"/>'
       + '<text class="'+show+'" x="'+(n.r+4).toFixed(1)+'" y="3">'+esc(n.id)+'</text>'
-      + (n.name ? '<text class="sub'+show+'" x="'+(n.r+4).toFixed(1)+'" y="14">'+esc(n.name.length>34?n.name.slice(0,33)+"…":n.name)+'</text>' : "")
-      + '<title>'+esc(n.id+(n.name?"\n"+n.name:"")+"\n"+n.kind+" · "+num(n.packets)+" pkts · "+bytes(n.bytes)+" · "+adj[n.id].length+" peers")+'</title></g>'; });
-  box.innerHTML = s + '</svg>';
+      + (sub ? '<text class="sub'+(n.name?"":" org")+show+'" x="'+(n.r+4).toFixed(1)+'" y="14">'+esc(sub.length>34?sub.slice(0,33)+"…":sub)+'</text>' : "")
+      + '<title>'+esc(n.id+(n.name?"\n"+n.name:"")+(n.org?"\norg: "+n.org:"")+"\n"+n.kind+" · "+num(n.packets)+" pkts · "+bytes(n.bytes)+" · "+adj[n.id].length+" peers"+(isPublic(n.id)?"\nright-click: whois":""))+'</title></g>'; });
+  box.innerHTML = s + '</svg><div class="zbar"><button data-gz="in" title="zoom in">+</button><button data-gz="out" title="zoom out">−</button><button data-gz="reset" title="reset view">fit</button><span id="zlab"></span></div>';
 
   const svg = box.querySelector("svg"), lines = svg.querySelectorAll("line"), gEls = {};
   svg.querySelectorAll(".nd").forEach(g => gEls[g.dataset.n] = g);
+  const place = () => {
+    const k = Z.k, tx = Z.tx, ty = Z.ty;
+    edges.forEach((e,i) => { const a = idx[e.a], b = idx[e.b], l = lines[i];
+      l.setAttribute("x1", (a.x*k+tx).toFixed(1)); l.setAttribute("y1", (a.y*k+ty).toFixed(1));
+      l.setAttribute("x2", (b.x*k+tx).toFixed(1)); l.setAttribute("y2", (b.y*k+ty).toFixed(1)); });
+    nodes.forEach(n => gEls[n.id].setAttribute("transform", "translate("+(n.x*k+tx).toFixed(1)+","+(n.y*k+ty).toFixed(1)+")"));
+    svg.classList.toggle("zin", k >= 1.8);
+    const zl = document.getElementById("zlab"); if(zl) zl.textContent = k.toFixed(1)+"×";
+  };
+  S.gplace = place; place();
+
   const focus = id => { svg.classList.add("focus");
     for(const i of adj[id]){ const e=edges[i]; lines[i].classList.add("hi"); gEls[e.a].classList.add("hi"); gEls[e.b].classList.add("hi"); }
     gEls[id].classList.add("hi"); };
   const unfocus = () => { svg.classList.remove("focus"); svg.querySelectorAll(".hi").forEach(x=>x.classList.remove("hi")); };
   svg.addEventListener("pointerover", e => { const g=e.target.closest(".nd"); if(g && !S.drag) focus(g.dataset.n); });
   svg.addEventListener("pointerout", e => { const g=e.target.closest(".nd"); if(g && !S.drag && !g.contains(e.relatedTarget)) unfocus(); });
-  svg.addEventListener("pointerdown", e => { const g=e.target.closest(".nd"); if(!g) return;
-    S.drag = {id:g.dataset.n, x0:e.clientX, y0:e.clientY, moved:false}; svg.setPointerCapture(e.pointerId); g.style.cursor="grabbing"; });
-  svg.addEventListener("pointermove", e => { const dr=S.drag; if(!dr) return;
+  svg.addEventListener("wheel", e => {
+    e.preventDefault();
+    const r = svg.getBoundingClientRect(), dy = e.deltaY*(e.deltaMode===1 ? 33 : e.deltaMode===2 ? 400 : 1);
+    zoomBy(Math.exp(-dy*0.0015), e.clientX-r.left, e.clientY-r.top);
+  }, {passive:false});
+  svg.addEventListener("dblclick", e => { if(!e.target.closest(".nd")){ Object.assign(Z, {k:1,tx:0,ty:0}); place(); } });
+  svg.addEventListener("contextmenu", e => { const g = e.target.closest(".nd"); if(!g) return;
+    e.preventDefault();
+    if(isPublic(g.dataset.n) && S.status?.whois) openWhois(g.dataset.n); else oops(g.dataset.n+": private/reserved address, no public registry record"); });
+  svg.addEventListener("pointerdown", e => {
+    if(e.button !== 0) return;
+    const g = e.target.closest(".nd");
+    S.drag = g ? {id:g.dataset.n, x0:e.clientX, y0:e.clientY, moved:false}
+               : {pan:true, x0:e.clientX, y0:e.clientY, tx0:Z.tx, ty0:Z.ty, moved:false};
+    svg.setPointerCapture(e.pointerId);
+    svg.classList.add("panning");
+  });
+  svg.addEventListener("pointermove", e => { const dr = S.drag; if(!dr) return;
     if(Math.abs(e.clientX-dr.x0)+Math.abs(e.clientY-dr.y0) > 3) dr.moved = true;
     if(!dr.moved) return;
+    if(dr.pan){ Z.tx = dr.tx0 + e.clientX - dr.x0; Z.ty = dr.ty0 + e.clientY - dr.y0; place(); return; }
     const r = svg.getBoundingClientRect(), n = idx[dr.id];
-    n.x = Math.max(8, Math.min(W-8, e.clientX-r.left)); n.y = Math.max(8, Math.min(H-8, e.clientY-r.top));
+    n.x = (e.clientX - r.left - Z.tx)/Z.k; n.y = (e.clientY - r.top - Z.ty)/Z.k;
     S.pos[n.id] = {x:n.x/W, y:n.y/H};
-    gEls[n.id].setAttribute("transform", "translate("+n.x.toFixed(1)+","+n.y.toFixed(1)+")");
-    for(const i of adj[n.id]){ const ed=edges[i], a=idx[ed.a], b=idx[ed.b];
-      lines[i].setAttribute("x1",a.x); lines[i].setAttribute("y1",a.y); lines[i].setAttribute("x2",b.x); lines[i].setAttribute("y2",b.y); } });
-  svg.addEventListener("pointerup", () => { const dr=S.drag; S.drag=null; if(!dr) return;
-    gEls[dr.id].style.cursor="";
-    if(!dr.moved){ const ip = S.q===dr.id ? "" : dr.id; $("#q").value = ip; S.q = ip; loadView(true); } });
+    place(); });
+  const end = () => { const dr = S.drag; S.drag = null; svg.classList.remove("panning"); if(!dr) return;
+    if(!dr.pan && !dr.moved){ const ip = S.q===dr.id ? "" : dr.id; $("#q").value = ip; S.q = ip; loadView(true); } };
+  svg.addEventListener("pointerup", end);
+  svg.addEventListener("pointercancel", () => { S.drag = null; svg.classList.remove("panning"); });
 }
 
 let inflight = false;
@@ -445,7 +567,7 @@ async function loadView(force){
     } else {
       if(S.drag) return;  // don't yank the graph out from under a drag
       S.gdata = await api(base+"/graph?limit=150&q="+q);
-      if(S.posFor !== S.sel){ S.pos = {}; S.posFor = S.sel; }
+      if(S.posFor !== S.sel){ S.pos = {}; S.posFor = S.sel; S.zoom = {k:1,tx:0,ty:0}; }
       html = mixView(sum); $("#exp1").href = base+"/flows.csv"; $("#exp2").style.display="none";
       count = S.gdata.total_edges > S.gdata.edges.length ? "graph: top "+S.gdata.edges.length+" of "+num(S.gdata.total_edges)+" pairs" : num(S.gdata.total_edges)+" pairs";
     }

@@ -16,6 +16,14 @@ in a small local dashboard:
   conversations, or bytes, on a log or linear scale. Line colour shows the
   traffic guess, node colour shows the address class, and node size shows volume.
   Hover a node to highlight its peers, click it to filter on it, or drag it.
+  Scroll to zoom around the cursor (labels for every node appear at about 1.8×),
+  drag the background to pan, and double-click or press **fit** to reset.
+  Line widths keep their 1–6px meaning at any zoom level.
+- **Whois quick view**: the ⓘ next to any public IP, or right-clicking a graph node,
+  opens a side panel. It shows the org, network name/handle, range/CIDR, origin
+  ASN + AS name, BGP prefix, country, RIR, abuse contact, and dates, with links to
+  the RDAP JSON, ARIN search, and bgp.he.net. Looked-up orgs then label talkers and
+  graph nodes.
 - **Traffic guesses** for encrypted/opaque flows (see below).
 - Export CSV, plus DNS as plain text.
 
@@ -41,6 +49,24 @@ These are guesses. Known blind spots: VPNs over TLS/443 (SSTP, OpenConnect)
 look like TLS. OpenVPN with `tls-auth`/`tls-crypt` lacks a signature and falls
 back to port. Encrypted BitTorrent (MSE) is only caught by behaviour. QUIC SNI
 is not decrypted.
+
+## Whois lookups (outbound traffic)
+
+These are the only thing spanwatch sends off the box, and only when you click.
+
+- Public IPs only. RFC1918, CGNAT/Tailscale, link-local, multicast, and
+  documentation ranges are refused server-side and never sent anywhere.
+- RDAP goes to `rdap.arin.net`, which redirects to RIPE/APNIC/LACNIC/AFRINIC
+  for their space. Origin ASN comes from Team Cymru (`whois.cymru.com:43`).
+- Results are cached in SQLite for 7 days and failures for 5 minutes. Queries are
+  paced at 1/s, at most 2 run at once, and duplicate concurrent requests are merged.
+- The endpoint requires the `X-Spanwatch-Action` header, so other sites can't
+  trigger lookups through your browser.
+- Lookups leave through the normal uplink; `span0` has no address and drops all
+  egress. To disable them entirely: `SPANWATCH_ARGS=--no-whois`.
+- RDAP shows who *holds the address block*, and that can differ from who runs
+  the service. 1.1.1.1, for example, is registered to APNIC Research and
+  Development but announced by Cloudflare (AS13335). The panel shows both.
 
 ## Receive-only by design
 

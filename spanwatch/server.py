@@ -14,6 +14,7 @@ from . import iface as ifmod
 from .classify import infer, graph as build_graph
 from .capture import LiveCapture
 from .session import Session
+from .whois import Whois
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
@@ -26,13 +27,14 @@ class ApiError(Exception):
 
 class App:
     def __init__(self, store, iface, dns_ports=(53,), max_duration=3600,
-                 keep=50, allow_addressed=False):
+                 keep=50, allow_addressed=False, whois=None):
         self.store = store
         self.iface = iface
         self.dns_ports = tuple(dns_ports)
         self.max_duration = max_duration
         self.keep = keep
         self.allow_addressed = allow_addressed
+        self.whois = whois if whois is not None else Whois(store, enabled=False)
         self.current = None
         self.capture = None
         self.lock = threading.Lock()
@@ -114,6 +116,7 @@ class App:
             "iface": st, "receive_only": ifmod.receive_only(st),
             "current": cur.summary() if cur else None,
             "max_duration": self.max_duration, "dns_ports": list(self.dns_ports),
+            "whois": self.whois.enabled,
             "host": os.uname().nodename, "now": time.time(),
         }
 
@@ -160,7 +163,7 @@ def dns_line(d):
         t, d["client"], d["resolver"], d["qtype"], d["qname"], ans, extra)
 
 
-def insights(flows, dns, n=12):
+def insights(flows, dns, n=12, org=lambda ip: ""):
     talk = Counter()
     for f in flows:
         b = f["bytes_cs"] + f["bytes_sc"]
@@ -188,7 +191,7 @@ def insights(flows, dns, n=12):
         rcodes[d["rcode"]] += 1
     top = lambda c: [{"key": k, "value": v} for k, v in c.most_common(n)]
     return {
-        "talkers": [{"key": k, "value": v, "name": names.get(k, "")}
+        "talkers": [{"key": k, "value": v, "name": names.get(k, ""), "org": org(k)}
                     for k, v in talk.most_common(n)],
         "services": top(svc), "guesses": top(guesses), "qnames": top(qn), "dns_clients": top(clients),
         "resolvers": top(resolvers), "rcodes": top(rcodes),
@@ -290,6 +293,18 @@ class Handler(BaseHTTPRequestHandler):
             if cur and not cur.saved:
                 sessions.insert(0, cur.summary())
             return self._send(200, {"sessions": sessions})
+        if path == "/api/whois":
+            # triggers outbound traffic, so it needs the same header as mutations
+            if self.headers.get("X-Spanwatch-Action") is None:
+                raise ApiError(403, "missing X-Spanwatch-Action header")
+            try:
+                return self._send(200, app.whois.lookup(qs.get("ip", ""), qs.get("refresh") == "1"))
+            except PermissionError as e:
+                raise ApiError(409, str(e))
+            except LookupError as e:
+                raise ApiError(422, str(e))
+            except ValueError:
+                raise ApiError(400, "not an IP address")
         m = ROUTE.match(path)
         if not m:
             raise ApiError(404, "not found")
@@ -299,7 +314,7 @@ class Handler(BaseHTTPRequestHandler):
         if what == "summary":
             s, bd = app.summary(sid)
             return self._send(200, {"session": s, "breakdown": bd,
-                                    "insights": insights(app.flows(sid), app.dns(sid))})
+                                    "insights": insights(app.flows(sid), app.dns(sid), org=app.whois.short)})
         if what == "flows":
             app.summary(sid)
             total, rows = filter_flows(app.flows(sid), q, qs.get("sort", "bytes"), limit)
@@ -308,7 +323,10 @@ class Handler(BaseHTTPRequestHandler):
             app.summary(sid)
             _, rows = filter_flows(app.flows(sid), q, "pkts", 10**9)
             glimit = max(1, min(int(qs.get("limit", 150)), 400))
-            return self._send(200, build_graph(rows, glimit))
+            g = build_graph(rows, glimit)
+            for nd in g["nodes"]:
+                nd["org"] = app.whois.short(nd["id"])
+            return self._send(200, g)
         if what == "dns":
             app.summary(sid)
             total, rows = filter_dns(app.dns(sid), q, limit)

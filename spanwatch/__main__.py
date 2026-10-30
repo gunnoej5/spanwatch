@@ -16,6 +16,7 @@ from .capture import read_pcap
 from .server import App, serve
 from .session import Session
 from .store import Store
+from .whois import Whois
 
 
 def _data_dir(p):
@@ -45,6 +46,8 @@ def main(argv=None):
                     help="extra Host header names to accept (e.g. a tailnet name)")
     sv.add_argument("--allow-addressed", action="store_true",
                     help="DANGER/testing: allow capture on an interface with IPs")
+    sv.add_argument("--no-whois", action="store_true",
+                    help="disable on-demand RDAP/Cymru lookups (no outbound traffic)")
 
     im = sub.add_parser("import", help="load a classic .pcap as a session")
     im.add_argument("pcap")
@@ -74,7 +77,8 @@ def main(argv=None):
         return 0
 
     host, _, port = a.listen.rpartition(":")
-    app = App(store, a.iface, _ports(a.dns_ports), a.max_duration, a.keep, a.allow_addressed)
+    app = App(store, a.iface, _ports(a.dns_ports), a.max_duration, a.keep, a.allow_addressed,
+              whois=Whois(store, enabled=not a.no_whois))
     httpd = serve(app, host.strip("[]"), int(port), a.allow_host)
 
     def bye(*_):

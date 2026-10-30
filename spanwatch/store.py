@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS dns (
   qtype TEXT, rcode TEXT, answers TEXT, ms REAL, ttl INTEGER
 );
 CREATE INDEX IF NOT EXISTS dns_sid ON dns(session_id);
+CREATE TABLE IF NOT EXISTS whois (ip TEXT PRIMARY KEY, ts REAL, data TEXT);
 """
 
 FLOW_COLS = ("client", "server", "proto", "port", "service", "pkts_cs",
@@ -112,6 +113,22 @@ class Store:
             d["answers"] = json.loads(d["answers"] or "[]")
             out.append(d)
         return out
+
+    def whois_all(self):
+        with self.lock:
+            rows = self.db.execute("SELECT ip, data FROM whois").fetchall()
+        out = {}
+        for ip, data in rows:
+            try:
+                out[ip] = json.loads(data)
+            except ValueError:
+                pass
+        return out
+
+    def whois_put(self, ip, d):
+        with self.lock, self.db:
+            self.db.execute("INSERT OR REPLACE INTO whois VALUES (?,?,?)",
+                            (ip, d["ts"], json.dumps(d)))
 
     def delete(self, sid):
         with self.lock, self.db:

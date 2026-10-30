@@ -24,6 +24,14 @@ CREATE TABLE IF NOT EXISTS dns (
 );
 CREATE INDEX IF NOT EXISTS dns_sid ON dns(session_id);
 CREATE TABLE IF NOT EXISTS whois (ip TEXT PRIMARY KEY, ts REAL, data TEXT);
+CREATE TABLE IF NOT EXISTS host_obs (
+  mac TEXT, ip TEXT, name TEXT, source TEXT, first REAL, last REAL, hits INTEGER,
+  PRIMARY KEY (mac, ip, name, source)
+);
+CREATE TABLE IF NOT EXISTS host_bind (
+  mac TEXT, ip TEXT, source TEXT, first REAL, last REAL, hits INTEGER,
+  PRIMARY KEY (mac, ip)
+);
 """
 
 FLOW_COLS = ("client", "server", "proto", "port", "service", "pkts_cs",
@@ -73,6 +81,34 @@ class Store:
                 % (",".join(DNS_COLS), ",".join("?" * len(DNS_COLS))),
                 ([sess.id] + [json.dumps(d[c]) if c == "answers" else d[c]
                               for c in DNS_COLS] for d in dns))
+        hosts = getattr(sess, "host_rows", None)
+        if hosts:
+            self.host_merge(*hosts())
+
+    def host_merge(self, obs, binds):
+        """Upsert hostname observations + MAC/IP bindings (cumulative, not per session)."""
+        with self.lock, self.db:
+            self.db.executemany(
+                "INSERT INTO host_obs VALUES (?,?,?,?,?,?,?) ON CONFLICT(mac, ip, name, source) DO UPDATE SET "
+                "first=MIN(first, excluded.first), last=MAX(last, excluded.last), hits=hits+excluded.hits",
+                obs)
+            self.db.executemany(
+                "INSERT INTO host_bind VALUES (?,?,?,?,?,?) ON CONFLICT(mac, ip) DO UPDATE SET "
+                "source=CASE WHEN excluded.last >= last THEN excluded.source ELSE source END, "
+                "first=MIN(first, excluded.first), last=MAX(last, excluded.last), hits=hits+excluded.hits",
+                binds)
+
+    def host_rows(self):
+        with self.lock:
+            obs = self.db.execute("SELECT mac, ip, name, source, first, last, hits FROM host_obs").fetchall()
+            binds = self.db.execute("SELECT mac, ip, source, first, last, hits FROM host_bind").fetchall()
+        return obs, binds
+
+    def host_prune(self, before):
+        with self.lock, self.db:
+            n = self.db.execute("DELETE FROM host_obs WHERE last < ?", (before,)).rowcount
+            n += self.db.execute("DELETE FROM host_bind WHERE last < ?", (before,)).rowcount
+        return n
 
     def sessions(self):
         with self.lock:

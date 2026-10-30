@@ -12,6 +12,7 @@ from .parse import (KIND_IP, KIND_L2, ETHERTYPES, PROTO_NAMES, SERVICES,
                     TCP_SYN, TCP_ACK, parse_frame, parse_dns, qtype_name,
                     RCODES, service_name)
 from .classify import classify_payload
+from .hostnames import Collector, HOST_PORTS
 
 MAX_FLOWS = 250_000
 MAX_DNS = 100_000
@@ -53,6 +54,7 @@ class Session:
         self.dns_pending = {}  # (client, cport, resolver, txid) -> query info
         self.dns = []
         self.names = {}       # ip -> name learned from DNS answers this session
+        self.hosts = Collector()  # local hostnames from DHCP/mDNS/NBNS/LLMNR/ARP
         self.protos = Counter()      # proto name -> packets
         self.proto_bytes = Counter()
         self.l2 = Counter()           # non-IP ethertypes -> frames
@@ -75,6 +77,8 @@ class Session:
             if p[0] == KIND_L2:
                 et = p[1]
                 self.l2[ETHERTYPES.get(et, "0x%04x" % et)] += 1
+                if et == 0x0806:
+                    self.hosts.arp(buf, n, ts)
                 return
             _, src, dst, proto, sport, dport, length, flags, poff, pend = p
             pname = PROTO_NAMES.get(proto, "IP/%d" % proto)
@@ -139,6 +143,10 @@ class Session:
                     msg = msg[2:]  # TCP length prefix; best-effort, one msg/segment
                 self._dns(src, sport, dst, dport, msg, ts)
 
+            # --- local hostnames (DHCP, mDNS, NetBIOS-NS, LLMNR)
+            if poff and proto == 17 and (sport in HOST_PORTS or dport in HOST_PORTS):
+                self.hosts.udp(buf, src, sport, dst, dport, poff, pend, ts)
+
             if ts - self._last_expire > 1.0:
                 self._expire_dns(ts)
 
@@ -179,6 +187,8 @@ class Session:
         for ip in d["ips"]:
             if len(self.names) < MAX_NAMES:
                 self.names[ip] = d["qname"]
+        if d["qtype"] == 12 and d["rcode"] == 0:
+            self.hosts.ptr(d["qname"], answers, ts)
 
     def _log_dns(self, ts, client, resolver, qname, qtype, rcode, answers, ms, ttl):
         if len(self.dns) >= MAX_DNS:
@@ -240,6 +250,10 @@ class Session:
                            for k, v in self.protos.most_common()],
                 "l2": [{"ethertype": k, "frames": v} for k, v in self.l2.most_common()],
             }
+
+    def host_rows(self):
+        with self.lock:
+            return self.hosts.obs_rows(), self.hosts.bind_rows()
 
     def names_snapshot(self):
         with self.lock:

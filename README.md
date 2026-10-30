@@ -19,6 +19,7 @@ in a small local dashboard:
   Scroll to zoom around the cursor (labels for every node appear at about 1.8×),
   drag the background to pan, and double-click or press **fit** to reset.
   Line widths keep their 1–6px meaning at any zoom level.
+- **Local hostnames** (Hosts tab): learned passively from DHCP, mDNS, NetBIOS, LLMNR and reverse DNS; exportable as a hosts file (see below).
 - **Whois quick view**: the ⓘ next to any public IP, or right-clicking a graph node,
   opens a side panel. It shows the org, network name/handle, range/CIDR, origin
   ASN + AS name, BGP prefix, country, RIR, abuse contact, and dates, with links to
@@ -73,6 +74,46 @@ These are the only thing spanwatch sends off the box, and only when you click.
 - RDAP shows who *holds the address block*, and that can differ from who runs
   the service. 1.1.1.1, for example, is registered to APNIC Research and
   Development but announced by Cloudflare (AS13335). The panel shows both.
+
+## Local hostnames (Hosts tab)
+
+Learned passively from chatter that LAN devices broadcast about themselves. No
+router credentials, no queries, nothing transmitted:
+
+| source | what it reads | weight |
+|---|---|---|
+| `dhcp` | option 12 (hostname) / 81 (client FQDN) from DISCOVER/REQUEST/INFORM; ACKs and renewals bind MAC → leased IP | strong |
+| `mdns` | A/AAAA and reverse-PTR records for `*.local` in multicast DNS responses | strong |
+| `netbios` | NBNS name registration/refresh broadcasts (workstation names only, groups like WORKGROUP skipped) | strong |
+| `dns-ptr` | reverse lookups of private addresses answered by your resolver | strong |
+| `llmnr` | LLMNR responses | weak |
+| `arp` | sender MAC/IP (binding only, no names) | — |
+| `file` | `/etc/spanwatch/hosts` overrides in hosts-file format; always wins, re-read on change | override |
+
+Names attach to addresses directly or through MAC→IP bindings, so a DHCP
+DISCOVER that carries only a MAC still lands on the right IP once that MAC is
+seen in an ARP or ACK. When an address changes hands, the newest MAC wins.
+Observations accumulate across sessions in SQLite. Anything not seen for 30 days
+is ignored, and anything older than 90 days is pruned. Confidence: **confirmed** means 2+ sources
+agree or an override exists, **likely** means one strong source, **weak** means LLMNR only.
+
+Learned names show in green under IPs in Conversations, DNS, top talkers, and
+the graph, and the filter box matches them. Labels use *current* knowledge, so a
+months-old session can show today's owner of a recycled DHCP address.
+
+Export a hosts table:
+
+```
+curl -s 'http://127.0.0.1:9595/api/hosts.txt?min_conf=2'   # hosts-file format, provenance in comments
+curl -s http://127.0.0.1:9595/api/hosts.csv
+curl -s http://127.0.0.1:9595/api/hosts                    # JSON
+sudo python3 -m spanwatch hosts --data /var/lib/private/spanwatch   # offline, from /opt/spanwatch
+```
+
+Coverage depends on what the mirror carries. DHCP happens at join/renew time
+(lease length), mDNS and NetBIOS are near-constant, and devices that do none of
+these (some IoT) stay nameless. Pin those in the override file. DHCPv6 is not
+parsed.
 
 ## Receive-only by design
 

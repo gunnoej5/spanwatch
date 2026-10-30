@@ -13,6 +13,7 @@ import sys
 from . import __version__
 from . import iface as ifmod
 from .capture import read_pcap
+from .hostnames import Directory, hosts_text
 from .server import App, serve
 from .session import Session
 from .store import Store
@@ -49,6 +50,9 @@ def main(argv=None):
     sv.add_argument("--lan", action="append", default=[],
                     help="extra CIDR to colour as local LAN (repeatable); the uplink's "
                          "subnet is detected automatically")
+    sv.add_argument("--hosts-file", default="/etc/spanwatch/hosts",
+                    help="/etc/hosts-format overrides for learned local hostnames "
+                         "(optional; re-read when it changes)")
     sv.add_argument("--no-whois", action="store_true",
                     help="disable on-demand RDAP/Cymru lookups (no outbound traffic)")
 
@@ -57,6 +61,12 @@ def main(argv=None):
     im.add_argument("--data")
     im.add_argument("--note", default="")
     im.add_argument("--dns-ports", default="53")
+
+    hs = sub.add_parser("hosts", help="print learned local hostnames (hosts-file format)")
+    hs.add_argument("--data")
+    hs.add_argument("--hosts-file", default="/etc/spanwatch/hosts")
+    hs.add_argument("--min-conf", type=int, default=1)
+    hs.add_argument("--json", action="store_true")
 
     st = sub.add_parser("status", help="print interface health")
     st.add_argument("--iface", default="span0")
@@ -71,6 +81,14 @@ def main(argv=None):
 
     store = Store(os.path.join(_data_dir(a.data), "spanwatch.db"))
 
+    if a.cmd == "hosts":
+        rows = Directory(store, a.hosts_file or None).rows()
+        if a.json:
+            print(json.dumps(rows, indent=2))
+        else:
+            sys.stdout.write(hosts_text(rows, a.min_conf))
+        return 0
+
     if a.cmd == "import":
         sess = Session(store.next_id(), "pcap:" + os.path.basename(a.pcap),
                        note=a.note or os.path.basename(a.pcap), dns_ports=_ports(a.dns_ports))
@@ -81,7 +99,8 @@ def main(argv=None):
 
     host, _, port = a.listen.rpartition(":")
     app = App(store, a.iface, _ports(a.dns_ports), a.max_duration, a.keep, a.allow_addressed,
-              whois=Whois(store, enabled=not a.no_whois), lan=a.lan)
+              whois=Whois(store, enabled=not a.no_whois), lan=a.lan,
+              hosts_file=a.hosts_file or None)
     httpd = serve(app, host.strip("[]"), int(port), a.allow_host)
 
     def bye(*_):

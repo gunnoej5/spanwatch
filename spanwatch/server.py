@@ -13,6 +13,7 @@ from urllib.parse import urlparse, parse_qs
 from . import iface as ifmod
 from .classify import infer, graph as build_graph
 from .capture import LiveCapture
+from .hostnames import Directory, hosts_text
 from .session import Session
 from .whois import Whois
 
@@ -27,7 +28,7 @@ class ApiError(Exception):
 
 class App:
     def __init__(self, store, iface, dns_ports=(53,), max_duration=3600,
-                 keep=50, allow_addressed=False, whois=None, lan=()):
+                 keep=50, allow_addressed=False, whois=None, lan=(), hosts_file=None):
         self.store = store
         self.iface = iface
         self.dns_ports = tuple(dns_ports)
@@ -41,6 +42,7 @@ class App:
         self.capture = None
         self.lock = threading.Lock()
         self._next_id = store.next_id()
+        self.hosts = Directory(store, hosts_file, live=self._live_hosts)
 
     # ------------------------------------------------------------ control
     def start(self, duration, note=""):
@@ -80,6 +82,7 @@ class App:
             self.store.save(sess)
             sess.saved = True
             self.store.prune(self.keep)
+            self.store.host_prune(time.time() - 90 * 86400)
         except Exception as e:  # keep server alive; serve from memory
             sess.error = "save failed: %s" % e
 
@@ -103,13 +106,27 @@ class App:
             raise ApiError(404, "no such session")
         return s, bd
 
+    def _live_hosts(self):
+        s = self.current
+        if s is not None and not s.saved:
+            return s.host_rows()
+        return [], []
+
     def flows(self, sid):
         live = self._live(sid)
-        return infer(live.flow_rows() if live else self.store.flows(sid))
+        rows = infer(live.flow_rows() if live else self.store.flows(sid))
+        hn = self.hosts.lookup()
+        for f in rows:
+            f["client_host"] = hn.get(f["client"], "")
+            f["server_host"] = hn.get(f["server"], "")
+        return rows
 
     def dns(self, sid):
         live = self._live(sid)
-        return live.dns_rows() if live else self.store.dns(sid)
+        rows = live.dns_rows() if live else self.store.dns(sid)
+        hn = self.hosts.lookup()
+        return [dict(d, client_host=hn.get(d["client"], ""), resolver_host=hn.get(d["resolver"], ""))
+                for d in rows]
 
     def lan(self):
         ts, nets = self._lan
@@ -149,7 +166,8 @@ def filter_flows(rows, q="", sort="bytes", limit=500):
     if q:
         rows = [f for f in rows if _match(q, f["client"], f["server"], f["proto"],
                                           f["port"], f["service"], f["client_name"],
-                                          f["server_name"], f["guess"], f["detail"])]
+                                          f["server_name"], f["guess"], f["detail"],
+                                          f.get("client_host"), f.get("server_host"))]
     key = FLOW_SORTS.get(sort, FLOW_SORTS["bytes"])
     rows.sort(key=key, reverse=sort not in ("port",))
     return len(rows), rows[:limit]
@@ -159,7 +177,8 @@ def filter_dns(rows, q="", limit=1000):
     q = q.strip().lower()
     if q:
         rows = [d for d in rows if _match(q, d["client"], d["resolver"], d["qname"],
-                                          d["qtype"], d["rcode"], " ".join(d["answers"]))]
+                                          d["qtype"], d["rcode"], " ".join(d["answers"]),
+                                          d.get("client_host"), d.get("resolver_host"))]
     rows = rows[::-1]  # newest first
     return len(rows), rows[:limit]
 
@@ -178,10 +197,12 @@ def insights(flows, dns, n=12, org=lambda ip: ""):
         b = f["bytes_cs"] + f["bytes_sc"]
         talk[f["client"]] += b
         talk[f["server"]] += b
-    names = {}
+    names, hosts = {}, {}
     for f in flows:
         names.setdefault(f["client"], f["client_name"])
         names.setdefault(f["server"], f["server_name"])
+        hosts.setdefault(f["client"], f.get("client_host", ""))
+        hosts.setdefault(f["server"], f.get("server_host", ""))
     svc = Counter()
     for f in flows:
         label = "%s/%s" % (f["proto"], f["port"]) if f["port"] is not None else f["proto"]
@@ -200,7 +221,8 @@ def insights(flows, dns, n=12, org=lambda ip: ""):
         rcodes[d["rcode"]] += 1
     top = lambda c: [{"key": k, "value": v} for k, v in c.most_common(n)]
     return {
-        "talkers": [{"key": k, "value": v, "name": names.get(k, ""), "org": org(k)}
+        "talkers": [{"key": k, "value": v, "name": names.get(k, ""), "host": hosts.get(k, ""),
+                     "org": org(k)}
                     for k, v in talk.most_common(n)],
         "services": top(svc), "guesses": top(guesses), "qnames": top(qn), "dns_clients": top(clients),
         "resolvers": top(resolvers), "rcodes": top(rcodes),
@@ -296,6 +318,25 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, fh.read(), "text/html; charset=utf-8")
         if path == "/api/status":
             return self._send(200, app.status())
+        if path in ("/api/hosts", "/api/hosts.txt", "/api/hosts.csv"):
+            rows = app.hosts.rows(qs.get("q", ""))
+            if path == "/api/hosts":
+                return self._send(200, {"total": len(rows), "rows": rows,
+                                        "hosts_file": app.hosts.hosts_file or ""})
+            disp = {"Content-Disposition": 'attachment; filename="spanwatch-hosts.%s"' % path[-3:]}
+            if path.endswith(".txt"):
+                try:
+                    mc = int(qs.get("min_conf", 1))
+                except ValueError:
+                    mc = 1
+                return self._send(200, hosts_text(rows, mc).encode(), "text/plain; charset=utf-8", disp)
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            cols = ["ip", "name", "conf", "sources", "mac", "alts", "first", "last", "hits"]
+            w.writerow(cols)
+            for r in rows:
+                w.writerow([" ".join(r[c]) if c in ("sources", "alts") else r[c] for c in cols])
+            return self._send(200, buf.getvalue().encode(), "text/csv; charset=utf-8", disp)
         if path == "/api/sessions":
             sessions = app.store.sessions()
             cur = app.current
@@ -333,8 +374,10 @@ class Handler(BaseHTTPRequestHandler):
             _, rows = filter_flows(app.flows(sid), q, "pkts", 10**9)
             glimit = max(1, min(int(qs.get("limit", 150)), 400))
             g = build_graph(rows, glimit)
+            hn = app.hosts.lookup()
             for nd in g["nodes"]:
                 nd["org"] = app.whois.short(nd["id"])
+                nd["host"] = hn.get(nd["id"], "")
             return self._send(200, g)
         if what == "dns":
             app.summary(sid)
@@ -352,13 +395,15 @@ class Handler(BaseHTTPRequestHandler):
         w = csv.writer(buf)
         if what == "flows.csv":
             _, rows = filter_flows(app.flows(sid), q, qs.get("sort", "bytes"), 10**9)
-            cols = ["client", "client_name", "server", "server_name", "proto", "port",
+            cols = ["client", "client_host", "client_name", "server", "server_host", "server_name",
+                    "proto", "port",
                     "service", "guess", "conf", "detail", "pkts_cs", "bytes_cs", "pkts_sc",
                     "bytes_sc", "first", "last"]
         else:
             _, rows = filter_dns(app.dns(sid), q, 10**9)
             rows = rows[::-1]
-            cols = ["ts", "client", "resolver", "qtype", "qname", "rcode", "ms", "ttl", "answers"]
+            cols = ["ts", "client", "client_host", "resolver", "qtype", "qname", "rcode", "ms",
+                    "ttl", "answers"]
         w.writerow(cols)
         for r in rows:
             w.writerow([" ".join(r[c]) if c == "answers" else r[c] for c in cols])

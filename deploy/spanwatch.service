@@ -1,0 +1,41 @@
+[Unit]
+Description=spanwatch passive LAN traffic summarizer (dashboard on 127.0.0.1:9595)
+After=network.target
+
+[Service]
+Environment=SPANWATCH_ARGS=
+EnvironmentFile=-/etc/spanwatch/spanwatch.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+WorkingDirectory=/opt/spanwatch
+ExecStart=/usr/bin/python3 -m spanwatch serve --iface span0 --listen 127.0.0.1:9595 $SPANWATCH_ARGS
+Restart=on-failure
+RestartSec=3
+
+# --- least privilege: throwaway unprivileged user holding exactly CAP_NET_RAW
+DynamicUser=yes
+StateDirectory=spanwatch
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_PACKET AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+MemoryMax=1500M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,49 @@
+#!/bin/sh
+# spanwatch-iface up|down <ifname>
+# Put a SPAN/mirror port into receive-only sniff mode. Installed root-owned to
+# /usr/local/sbin; run by spanwatch-iface@<ifname>.service on hotplug.
+set -eu
+ACTION="${1:?up|down}"
+IF="${2:?ifname}"
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+NFT_TABLE="spanwatch_$(printf '%s' "$IF" | tr -c 'A-Za-z0-9_' '_')"
+
+case "$ACTION" in
+up)
+  # 1. No IPv6 at all: no link-local, no SLAAC, no RA processing.
+  if [ -d "/proc/sys/net/ipv6/conf/$IF" ]; then
+    echo 0 > "/proc/sys/net/ipv6/conf/$IF/accept_ra"
+    echo 0 > "/proc/sys/net/ipv6/conf/$IF/autoconf"
+    echo 1 > "/proc/sys/net/ipv6/conf/$IF/disable_ipv6"
+  fi
+  # 2. No IPv4 either, and never answer/emit ARP.
+  ip addr flush dev "$IF" 2>/dev/null || true
+  ip link set dev "$IF" arp off multicast off
+  # 3. Hard enforcement: drop every frame the kernel tries to transmit on this
+  #    port (netdev egress hook, kernel >= 5.16). Belt to the braces above.
+  if command -v nft >/dev/null 2>&1; then
+    nft delete table netdev "$NFT_TABLE" 2>/dev/null || true
+    if ! nft -f - <<EOF
+table netdev $NFT_TABLE {
+  chain egress {
+    type filter hook egress device "$IF" priority 0; policy drop;
+  }
+}
+EOF
+    then echo "spanwatch-iface: WARNING nft egress drop not applied" >&2; fi
+  fi
+  # 4. Accurate per-packet counts: no receive coalescing; max RX ring.
+  if command -v ethtool >/dev/null 2>&1; then
+    ethtool -K "$IF" gro off lro off 2>/dev/null || true
+    max=$(ethtool -g "$IF" 2>/dev/null | awk '/^Pre-set/{p=1} p&&/^RX:/{print $2; exit}')
+    if [ -n "${max:-}" ]; then ethtool -G "$IF" rx "$max" 2>/dev/null || true; fi
+  fi
+  # 5. Up + promiscuous.
+  ip link set dev "$IF" promisc on up
+  ;;
+down)
+  ip link set dev "$IF" promisc off down 2>/dev/null || true
+  if command -v nft >/dev/null 2>&1; then nft delete table netdev "$NFT_TABLE" 2>/dev/null || true; fi
+  ;;
+*) echo "usage: $0 up|down <ifname>" >&2; exit 2 ;;
+esac

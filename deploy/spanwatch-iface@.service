@@ -1,0 +1,14 @@
+[Unit]
+Description=spanwatch: receive-only sniff mode for %i
+BindsTo=sys-subsystem-net-devices-%i.device
+After=sys-subsystem-net-devices-%i.device
+Before=spanwatch.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/spanwatch-iface up %i
+ExecStop=/usr/local/sbin/spanwatch-iface down %i
+
+[Install]
+WantedBy=sys-subsystem-net-devices-%i.device

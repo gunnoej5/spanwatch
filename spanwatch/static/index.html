@@ -1,0 +1,324 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>spanwatch</title>
+<style>
+:root{
+  --ink:#07090b; --panel:#0d1114; --panel2:#11171b; --line:#1d262c; --line2:#2a363e;
+  --text:#c9d4d8; --dim:#6f7f87; --faint:#43525a;
+  --sig:#5cf2a6; --sig-d:#1d4d38; --amber:#ffb547; --amber-d:#4a3613;
+  --red:#ff5d5d; --red-d:#4a1717; --blue:#6cb6ff; --violet:#b69cff;
+  --mono:"JetBrains Mono","IBM Plex Mono","Cascadia Code",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:"Inter Tight","IBM Plex Sans",system-ui,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--ink);color:var(--text);font:13px/1.45 var(--mono);
+  background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+  background-size:48px 48px;background-position:-1px -1px;background-attachment:fixed}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;
+  background:radial-gradient(ellipse at 20% -10%,rgba(92,242,166,.07),transparent 55%),linear-gradient(transparent,rgba(7,9,11,.85) 70%)}
+a{color:var(--blue)}
+.wrap{position:relative;display:grid;grid-template-columns:270px 1fr;grid-template-rows:auto 1fr;height:100vh}
+header{grid-column:1/3;display:flex;align-items:center;gap:18px;padding:10px 16px;border-bottom:1px solid var(--line2);background:rgba(13,17,20,.92);backdrop-filter:blur(6px)}
+.brand{font-weight:700;letter-spacing:.14em;text-transform:uppercase;font-size:12px;color:var(--sig);display:flex;align-items:center;gap:8px}
+.brand i{width:9px;height:9px;border-radius:50%;background:var(--faint);box-shadow:0 0 0 3px rgba(255,255,255,.03)}
+.brand i.on{background:var(--sig);box-shadow:0 0 12px var(--sig);animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+.host{color:var(--dim)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line2);padding:2px 8px;border-radius:2px;color:var(--dim);font-size:11px;white-space:nowrap}
+.chip.ok{color:var(--sig);border-color:var(--sig-d);background:rgba(92,242,166,.05)}
+.chip.warn{color:var(--amber);border-color:var(--amber-d);background:rgba(255,181,71,.06)}
+.chip.bad{color:var(--red);border-color:var(--red-d);background:rgba(255,93,93,.08);font-weight:700}
+.spacer{flex:1}
+.ctl{display:flex;align-items:center;gap:6px}
+.seg{display:flex;border:1px solid var(--line2)}
+.seg button{background:none;border:0;color:var(--dim);font:inherit;font-size:11px;padding:4px 9px;cursor:pointer;border-right:1px solid var(--line2)}
+.seg button:last-child{border-right:0}
+.seg button.sel{color:var(--ink);background:var(--sig)}
+input[type=text]{background:var(--ink);border:1px solid var(--line2);color:var(--text);font:inherit;padding:4px 8px;outline:none}
+input[type=text]:focus{border-color:var(--sig-d)}
+.btn{font:inherit;font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:11px;padding:5px 14px;cursor:pointer;border:1px solid var(--sig);background:var(--sig);color:var(--ink)}
+.btn.stop{background:var(--red);border-color:var(--red)}
+.btn.ghost{background:none;color:var(--dim);border-color:var(--line2);font-weight:400;letter-spacing:0;text-transform:none}
+.btn.ghost:hover{color:var(--text);border-color:var(--dim)}
+.btn:disabled{opacity:.35;cursor:not-allowed}
+aside{border-right:1px solid var(--line2);background:rgba(13,17,20,.88);overflow:auto}
+aside h3,.sect h3{margin:0;padding:12px 14px 8px;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--faint);font-weight:600}
+.sess{padding:9px 14px;border-left:2px solid transparent;cursor:pointer;border-bottom:1px solid var(--line)}
+.sess:hover{background:var(--panel2)}
+.sess.sel{border-left-color:var(--sig);background:var(--panel2)}
+.sess .t{display:flex;justify-content:space-between;color:var(--text)}
+.sess .m{color:var(--dim);font-size:11px}
+.sess .n{color:var(--amber);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sess.live .t::after{content:"● live";color:var(--sig);font-size:10px}
+main{overflow:auto;padding:14px 18px 40px}
+.meter{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line2);border:1px solid var(--line2);margin-bottom:12px}
+.meter div{background:var(--panel);padding:8px 12px}
+.meter b{display:block;font-size:19px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums}
+.meter span{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+.meter .hot b{color:var(--red)}
+.bar{height:2px;background:var(--line);margin:-12px 0 12px;position:relative}
+.bar i{position:absolute;left:0;top:0;bottom:0;background:var(--sig);box-shadow:0 0 8px var(--sig);transition:width .9s linear}
+.tabs{display:flex;gap:0;align-items:end;border-bottom:1px solid var(--line2);margin-bottom:10px}
+.tabs button{background:none;border:0;border-bottom:2px solid transparent;color:var(--dim);font:inherit;padding:7px 14px;cursor:pointer;margin-bottom:-1px}
+.tabs button.sel{color:var(--text);border-bottom-color:var(--sig)}
+.tabs .tools{margin-left:auto;display:flex;gap:6px;align-items:center;padding-bottom:5px}
+.count{color:var(--faint);font-size:11px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th{position:sticky;top:-14px;background:var(--ink);text-align:left;font-weight:500;color:var(--faint);font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid var(--line2);white-space:nowrap}
+th[data-sort]{cursor:pointer}
+th[data-sort]:hover,th.sorted{color:var(--sig)}
+td{padding:4px 8px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:top}
+tr:hover td{background:rgba(92,242,166,.035)}
+td.r,th.r{text-align:right}
+.ip{color:var(--text);cursor:pointer}
+.ip:hover{color:var(--sig)}
+.nm{display:block;color:var(--faint);font-size:11px;max-width:300px;overflow:hidden;text-overflow:ellipsis}
+.arrow{color:var(--faint);padding:0 2px}
+.p-TCP{color:var(--blue)}.p-UDP{color:var(--violet)}.p-ICMP,.p-ICMPv6{color:var(--amber)}
+.svc{color:var(--dim)}
+.dir{color:var(--faint);font-size:11px}
+.rc-NOERROR{color:var(--sig)}.rc-NXDOMAIN{color:var(--amber)}.rc-SERVFAIL,.rc-REFUSED,.rc-NO-RESPONSE{color:var(--red)}
+.ans{white-space:normal;color:var(--dim);max-width:520px;word-break:break-all}
+.qn{color:var(--text)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
+.sect{background:var(--panel);border:1px solid var(--line2)}
+.sect h3{border-bottom:1px solid var(--line)}
+.hrow{display:grid;grid-template-columns:1fr auto;gap:10px;padding:4px 14px;position:relative}
+.hrow .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;position:relative;z-index:1}
+.hrow .v{color:var(--dim);position:relative;z-index:1}
+.hrow .fill{position:absolute;left:0;top:2px;bottom:2px;background:linear-gradient(90deg,rgba(92,242,166,.16),rgba(92,242,166,.04));border-right:1px solid rgba(92,242,166,.4)}
+.sect.amber .fill{background:linear-gradient(90deg,rgba(255,181,71,.16),rgba(255,181,71,.04));border-right-color:rgba(255,181,71,.4)}
+.empty{color:var(--faint);padding:40px;text-align:center}
+.err{position:fixed;bottom:14px;right:14px;background:var(--red-d);border:1px solid var(--red);color:#ffd6d6;padding:8px 12px;max-width:520px;z-index:9}
+.hint{color:var(--faint);font-size:11px;padding:0 14px 12px}
+@media (max-width:900px){.wrap{grid-template-columns:1fr}aside{display:none}.meter{grid-template-columns:repeat(3,1fr)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="brand"><i id="led"></i>spanwatch</div>
+  <div class="host" id="host"></div>
+  <div class="chips" id="chips"></div>
+  <div class="spacer"></div>
+  <div class="ctl">
+    <div class="seg" id="dur"></div>
+    <input type="text" id="note" placeholder="note (optional)" size="18" maxlength="200">
+    <button class="btn" id="go">Capture</button>
+  </div>
+</header>
+<aside>
+  <h3>Sessions</h3>
+  <div id="sessions"></div>
+</aside>
+<main>
+  <div class="meter" id="meter"></div>
+  <div class="bar"><i id="prog" style="width:0"></i></div>
+  <div class="tabs" id="tabs">
+    <button data-t="flows" class="sel">Conversations</button>
+    <button data-t="dns">DNS</button>
+    <button data-t="mix">Breakdown</button>
+    <div class="tools">
+      <span class="count" id="count"></span>
+      <input type="text" id="q" placeholder="filter: ip, port, proto, name…" size="30">
+      <a class="btn ghost" id="exp1" href="#">csv</a>
+      <a class="btn ghost" id="exp2" href="#" style="display:none">txt</a>
+      <button class="btn ghost" id="del" title="delete session">delete</button>
+    </div>
+  </div>
+  <div id="view"><div class="empty">no session selected — pick a duration and hit <b>Capture</b></div></div>
+</main>
+</div>
+<div class="err" id="err" hidden></div>
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const DUR = [[30,"30s"],[120,"2m"],[300,"5m"],[900,"15m"],[3600,"60m"]];
+const S = {dur: 120, sel: null, tab: "flows", sort: "bytes", q: "", status: null, sessions: [], timer: null};
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const num = n => (n ?? 0).toLocaleString();
+function bytes(n){n=n||0;const u=["B","KB","MB","GB","TB"];let i=0;while(n>=1024&&i<u.length-1){n/=1024;i++}return (i?n.toFixed(n<10?2:1):n)+" "+u[i]}
+function dur(s){s=Math.max(0,Math.round(s||0));const m=Math.floor(s/60),x=s%60;return m?m+"m"+String(x).padStart(2,"0")+"s":x+"s"}
+const tfmt = t => t ? new Date(t*1000).toLocaleTimeString([], {hour12:false}) : "";
+const dfmt = t => t ? new Date(t*1000).toLocaleString([], {month:"short",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false}) : "";
+
+function oops(msg){const e=$("#err");e.textContent=msg;e.hidden=false;clearTimeout(oops.t);oops.t=setTimeout(()=>e.hidden=true,6000)}
+async function api(path, opt={}){
+  const r = await fetch(path, opt);
+  const j = await r.json().catch(()=>({error: r.statusText}));
+  if(!r.ok) throw new Error(j.error || r.status);
+  return j;
+}
+const post = (p, body) => api(p, {method:"POST", headers:{"Content-Type":"application/json","X-Spanwatch-Action":"1"}, body: JSON.stringify(body||{})});
+
+// ---------------------------------------------------------------- header
+function renderDur(){
+  $("#dur").innerHTML = DUR.map(([v,l]) => '<button data-v="'+v+'" class="'+(v===S.dur?"sel":"")+'">'+l+'</button>').join("");
+}
+$("#dur").onclick = e => { const v = +e.target.dataset.v; if(v){S.dur=v;renderDur()} };
+
+function renderStatus(){
+  const st = S.status; if(!st) return;
+  const f = st.iface, cur = st.current, running = cur && cur.status === "running";
+  $("#host").textContent = st.host;
+  $("#led").className = running ? "on" : "";
+  const c = [];
+  if(!f.present){ c.push('<span class="chip bad">'+esc(f.iface)+' absent</span>'); }
+  else {
+    c.push('<span class="chip '+(f.carrier?"ok":"warn")+'">'+esc(f.iface)+' '+(f.carrier?"link":"no-link")+(f.speed_mbps?" "+(f.speed_mbps>=1000?(f.speed_mbps/1000)+"G":f.speed_mbps+"M"):"")+'</span>');
+    c.push(st.receive_only ? '<span class="chip ok" title="no IPv4/IPv6 addresses on the sniff port">no IP ✓</span>'
+                           : '<span class="chip bad" title="'+esc((f.addresses||[]).join(", "))+'">HAS IP: '+esc((f.addresses||["?"]).join(", "))+'</span>');
+    c.push('<span class="chip '+(f.promisc?"ok":"warn")+'">'+(f.promisc?"promisc":"not promisc")+'</span>');
+    c.push('<span class="chip '+(f.tx_packets===0?"ok":"warn")+'" title="packets transmitted by the sniff port since it came up">tx '+num(f.tx_packets)+'</span>');
+    if(f.ipv6_disabled===false) c.push('<span class="chip warn">ipv6 on</span>');
+  }
+  $("#chips").innerHTML = c.join("");
+  const go = $("#go");
+  go.textContent = running ? "Stop" : "Capture";
+  go.className = "btn" + (running ? " stop" : "");
+  go.disabled = !running && (!f.present || !st.receive_only);
+}
+$("#go").onclick = async () => {
+  try{
+    const running = S.status?.current?.status === "running";
+    if(running){ await post("/api/stop"); }
+    else { const s = await post("/api/start", {duration: S.dur, note: $("#note").value}); S.sel = s.id; $("#note").value=""; }
+    await tick(true);
+  }catch(e){ oops(e.message) }
+};
+
+// ---------------------------------------------------------------- sessions
+function renderSessions(){
+  const box = $("#sessions");
+  if(!S.sessions.length){ box.innerHTML = '<div class="hint">nothing captured yet</div>'; return; }
+  box.innerHTML = S.sessions.map(s => '<div class="sess '+(s.id===S.sel?"sel ":"")+(s.status==="running"?"live":"")+'" data-id="'+s.id+'">'
+    + '<div class="t"><span>#'+s.id+' · '+dfmt(s.started)+'</span></div>'
+    + '<div class="m">'+dur(s.elapsed)+' · '+num(s.packets)+' pkts · '+bytes(s.bytes)+' · '+num(s.dns_count)+' dns'+(s.status==="error"?' · <span style="color:var(--red)">error</span>':"")+'</div>'
+    + (s.note?'<div class="n">'+esc(s.note)+'</div>':"")
+    + '</div>').join("");
+}
+$("#sessions").onclick = e => { const d = e.target.closest(".sess"); if(d){ S.sel = +d.dataset.id; renderSessions(); loadView(true) } };
+
+// ---------------------------------------------------------------- meter
+function renderMeter(s){
+  if(!s){ $("#meter").innerHTML=""; $("#prog").style.width="0"; return; }
+  const el = Math.max(s.elapsed, 0.001);
+  const live = s.status === "running";
+  const cells = [
+    ["packets", num(s.packets)], ["volume", bytes(s.bytes)],
+    ["avg rate", ((s.bytes*8/el)/1e6).toFixed(2)+" Mb/s"], ["pps", num(Math.round(s.packets/el))],
+    ["conversations", num(s.flow_count)], ["dns", num(s.dns_count)],
+    ["kernel drops", num(s.kernel_drops), s.kernel_drops>0],
+  ];
+  $("#meter").innerHTML = cells.map(([k,v,hot]) => '<div class="'+(hot?"hot":"")+'"><b>'+v+'</b><span>'+k+'</span></div>').join("");
+  const pct = s.duration ? Math.min(100, 100*s.elapsed/s.duration) : 100;
+  $("#prog").style.width = (live ? pct : 100) + "%";
+  $("#prog").style.background = live ? "" : "var(--faint)";
+  $("#prog").style.boxShadow = live ? "" : "none";
+  if(s.error) oops("session #"+s.id+": "+s.error);
+}
+
+// ---------------------------------------------------------------- views
+$("#tabs").onclick = e => { const t = e.target.dataset?.t; if(t){ S.tab=t; document.querySelectorAll("#tabs button[data-t]").forEach(b=>b.classList.toggle("sel", b.dataset.t===t)); loadView(true) } };
+let qT; $("#q").oninput = e => { clearTimeout(qT); qT = setTimeout(()=>{ S.q = e.target.value; loadView(true) }, 220) };
+$("#del").onclick = async () => {
+  if(S.sel==null || !confirm("Delete session #"+S.sel+"?")) return;
+  try{ await api("/api/sessions/"+S.sel, {method:"DELETE", headers:{"X-Spanwatch-Action":"1"}}); S.sel=null; await tick(true) }catch(e){ oops(e.message) }
+};
+function ipCell(ip, name){ return '<span class="ip" data-ip="'+esc(ip)+'">'+esc(ip)+'</span>'+(name?'<span class="nm" title="'+esc(name)+'">'+esc(name)+'</span>':"") }
+$("#view").onclick = e => {
+  const ip = e.target.dataset?.ip; if(ip){ $("#q").value = ip; S.q = ip; loadView(true); return; }
+  const s = e.target.closest("th[data-sort]"); if(s){ S.sort = s.dataset.sort; loadView(true) }
+};
+
+function flowsTable(d){
+  if(!d.rows.length) return '<div class="empty">no conversations'+(S.q?" match":" yet")+'</div>';
+  const th = (k,l,cls="") => '<th '+(k?'data-sort="'+k+'"':"")+' class="'+cls+(S.sort===k?" sorted":"")+'">'+l+'</th>';
+  return '<table><thead><tr>'+th("","client")+th("","")+th("","server")+th("","proto")+th("port","port")+th("pkts","pkts →/←","r")+th("bytes","bytes →/←","r")+th("first","first")+th("last","last")+'</tr></thead><tbody>'
+    + d.rows.map(f => '<tr><td>'+ipCell(f.client,f.client_name)+'</td><td class="arrow">→</td><td>'+ipCell(f.server,f.server_name)+'</td>'
+      + '<td class="p-'+esc(f.proto)+'">'+esc(f.proto)+'</td>'
+      + '<td>'+(f.port==null?'<span class="svc">—</span>':esc(f.port)+(f.service?' <span class="svc">'+esc(f.service)+'</span>':""))+'</td>'
+      + '<td class="r">'+num(f.pkts_cs)+' <span class="dir">/</span> '+num(f.pkts_sc)+'</td>'
+      + '<td class="r">'+bytes(f.bytes_cs)+' <span class="dir">/</span> '+bytes(f.bytes_sc)+'</td>'
+      + '<td class="dir">'+tfmt(f.first)+'</td><td class="dir">'+tfmt(f.last)+'</td></tr>').join("")
+    + '</tbody></table>';
+}
+function dnsTable(d){
+  if(!d.rows.length) return '<div class="empty">no DNS '+(S.q?"matches":"seen yet")+' — only plaintext DNS on port(s) '+esc((S.status?.dns_ports||[53]).join(","))+' is visible; DoH/DoT is opaque</div>';
+  return '<table><thead><tr><th>time</th><th>requestor</th><th>type</th><th>query</th><th>answer</th><th>provider</th><th>rcode</th><th class="r">ms</th></tr></thead><tbody>'
+    + d.rows.map(x => '<tr><td class="dir">'+tfmt(x.ts)+'</td><td>'+ipCell(x.client)+'</td><td class="svc">'+esc(x.qtype)+'</td>'
+      + '<td class="qn">'+esc(x.qname)+'</td><td class="ans">'+(x.answers.length?esc(x.answers.join(", ")):'<span class="dir">—</span>')+'</td>'
+      + '<td>'+ipCell(x.resolver)+'</td><td class="rc-'+esc(x.rcode)+'">'+esc(x.rcode)+'</td><td class="r dir">'+(x.ms==null?"":x.ms)+'</td></tr>').join("")
+    + '</tbody></table>';
+}
+function hist(title, rows, fmt, cls="", labeler){
+  if(!rows || !rows.length) return '<div class="sect '+cls+'"><h3>'+title+'</h3><div class="hint">none</div></div>';
+  const max = Math.max(...rows.map(r=>r.value));
+  return '<div class="sect '+cls+'"><h3>'+title+'</h3><div style="padding:6px 0">'
+    + rows.map(r => '<div class="hrow"><i class="fill" style="width:'+(100*r.value/max).toFixed(1)+'%"></i><span class="lbl" title="'+esc(r.key)+'">'+(labeler?labeler(r):esc(r.key))+'</span><span class="v">'+fmt(r.value)+'</span></div>').join("")
+    + '</div></div>';
+}
+function mixView(d){
+  const b = d.breakdown || {}, i = d.insights || {};
+  const protos = (b.protos||[]).map(p=>({key:p.proto, value:p.bytes, pk:p.packets}));
+  return '<div class="grid">'
+    + hist("Top talkers (bytes)", i.talkers, bytes, "", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>'+(r.name?' <span class="svc">'+esc(r.name)+'</span>':""))
+    + hist("Protocols (bytes)", protos, bytes)
+    + hist("Services (bytes)", i.services, bytes)
+    + hist("DNS names (queries)", i.qnames, num, "amber")
+    + hist("DNS requestors", i.dns_clients, num, "amber", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>')
+    + hist("DNS providers", i.resolvers, num, "amber", r => '<span class="ip" data-ip="'+esc(r.key)+'">'+esc(r.key)+'</span>')
+    + hist("DNS rcodes", i.rcodes, num, "amber")
+    + hist("Non-IP frames", (b.l2||[]).map(x=>({key:x.ethertype,value:x.frames})), num)
+    + '</div>';
+}
+
+let inflight = false;
+async function loadView(force){
+  if(S.sel == null){ renderMeter(null); $("#count").textContent=""; return; }
+  if(inflight && !force) return;
+  inflight = true;
+  const base = "/api/sessions/"+S.sel, q = encodeURIComponent(S.q);
+  try{
+    const sum = await api(base);
+    renderMeter(sum.session);
+    let html, count = "";
+    if(S.tab === "flows"){
+      const d = await api(base+"/flows?limit=1000&sort="+S.sort+"&q="+q);
+      html = flowsTable(d); count = d.total > d.rows.length ? num(d.rows.length)+" of "+num(d.total) : num(d.total)+" rows";
+      $("#exp1").href = base+"/flows.csv?sort="+S.sort+"&q="+q; $("#exp2").style.display="none";
+    } else if(S.tab === "dns"){
+      const d = await api(base+"/dns?limit=2000&q="+q);
+      html = dnsTable(d); count = d.total > d.rows.length ? num(d.rows.length)+" of "+num(d.total) : num(d.total)+" queries";
+      $("#exp1").href = base+"/dns.csv?q="+q; $("#exp2").href = base+"/dns.txt?q="+q; $("#exp2").style.display="";
+    } else { html = mixView(sum); $("#exp1").href = base+"/flows.csv"; $("#exp2").style.display="none"; }
+    $("#count").textContent = count;
+    const v = $("#view"), y = v.parentElement.scrollTop;
+    v.innerHTML = html; v.parentElement.scrollTop = y;
+  }catch(e){ if(String(e.message).includes("no such session")){ S.sel=null } else oops(e.message) }
+  finally{ inflight = false }
+}
+
+async function tick(force){
+  try{
+    const [st, ss] = await Promise.all([api("/api/status"), api("/api/sessions")]);
+    S.status = st; S.sessions = ss.sessions;
+    if(S.sel == null && S.sessions.length) S.sel = S.sessions[0].id;
+    renderStatus(); renderSessions();
+    const selLive = S.sessions.find(s=>s.id===S.sel)?.status === "running";
+    if(force || selLive || tick.wasLive) await loadView(force);
+    tick.wasLive = selLive;
+  }catch(e){ oops("status: "+e.message) }
+}
+renderDur();
+tick(true);
+setInterval(tick, 2000);
+</script>
+</body>
+</html>

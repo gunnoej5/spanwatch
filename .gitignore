@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+*.pcap
+*.pcapng
+*.db
+*.sqlite
+*.db-wal
+*.db-shm
+/data/

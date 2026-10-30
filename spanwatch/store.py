@@ -1,0 +1,125 @@
+"""SQLite persistence for finished sessions."""
+import json
+import sqlite3
+import threading
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS sessions (
+  id INTEGER PRIMARY KEY,
+  iface TEXT, note TEXT, started REAL, ended REAL, duration REAL,
+  status TEXT, error TEXT, packets INTEGER, bytes INTEGER,
+  kernel_drops INTEGER, kernel_seen INTEGER, flow_count INTEGER,
+  dns_count INTEGER, truncated_flows INTEGER, breakdown TEXT
+);
+CREATE TABLE IF NOT EXISTS flows (
+  session_id INTEGER, client TEXT, server TEXT, proto TEXT, port INTEGER,
+  service TEXT, pkts_cs INTEGER, bytes_cs INTEGER, pkts_sc INTEGER,
+  bytes_sc INTEGER, first REAL, last REAL, client_name TEXT, server_name TEXT
+);
+CREATE INDEX IF NOT EXISTS flows_sid ON flows(session_id);
+CREATE TABLE IF NOT EXISTS dns (
+  session_id INTEGER, ts REAL, client TEXT, resolver TEXT, qname TEXT,
+  qtype TEXT, rcode TEXT, answers TEXT, ms REAL, ttl INTEGER
+);
+CREATE INDEX IF NOT EXISTS dns_sid ON dns(session_id);
+"""
+
+FLOW_COLS = ("client", "server", "proto", "port", "service", "pkts_cs",
+             "bytes_cs", "pkts_sc", "bytes_sc", "first", "last",
+             "client_name", "server_name")
+DNS_COLS = ("ts", "client", "resolver", "qname", "qtype", "rcode", "answers",
+            "ms", "ttl")
+SUMMARY_COLS = ("id", "iface", "note", "started", "ended", "duration",
+                "status", "error", "packets", "bytes", "kernel_drops",
+                "kernel_seen", "flow_count", "dns_count", "truncated_flows")
+
+
+class Store:
+    def __init__(self, path):
+        self.db = sqlite3.connect(path, check_same_thread=False)
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.executescript(SCHEMA)
+        self.lock = threading.Lock()
+
+    def next_id(self):
+        with self.lock:
+            r = self.db.execute("SELECT COALESCE(MAX(id), 0) + 1 FROM sessions").fetchone()
+        return r[0]
+
+    def save(self, sess):
+        s = sess.summary()
+        flows = sess.flow_rows()
+        dns = sess.dns_rows()
+        bd = json.dumps(sess.breakdown())
+        with self.lock, self.db:
+            self.db.execute(
+                "INSERT OR REPLACE INTO sessions (%s, breakdown) VALUES (%s)"
+                % (",".join(SUMMARY_COLS), ",".join("?" * (len(SUMMARY_COLS) + 1))),
+                [s[c] for c in SUMMARY_COLS] + [bd])
+            self.db.execute("DELETE FROM flows WHERE session_id=?", (sess.id,))
+            self.db.execute("DELETE FROM dns WHERE session_id=?", (sess.id,))
+            self.db.executemany(
+                "INSERT INTO flows VALUES (?,%s)" % ",".join("?" * len(FLOW_COLS)),
+                ([sess.id] + [f[c] for c in FLOW_COLS] for f in flows))
+            self.db.executemany(
+                "INSERT INTO dns VALUES (?,%s)" % ",".join("?" * len(DNS_COLS)),
+                ([sess.id] + [json.dumps(d[c]) if c == "answers" else d[c]
+                              for c in DNS_COLS] for d in dns))
+
+    def sessions(self):
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT %s FROM sessions ORDER BY id DESC" % ",".join(SUMMARY_COLS)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(zip(SUMMARY_COLS, r))
+            d["elapsed"] = (d["ended"] or d["started"]) - d["started"]
+            out.append(d)
+        return out
+
+    def session(self, sid):
+        with self.lock:
+            r = self.db.execute(
+                "SELECT %s, breakdown FROM sessions WHERE id=?" % ",".join(SUMMARY_COLS),
+                (sid,)).fetchone()
+        if not r:
+            return None, None
+        d = dict(zip(SUMMARY_COLS, r[:-1]))
+        d["elapsed"] = (d["ended"] or d["started"]) - d["started"]
+        return d, json.loads(r[-1] or "{}")
+
+    def flows(self, sid):
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT %s FROM flows WHERE session_id=?" % ",".join(FLOW_COLS), (sid,)).fetchall()
+        return [dict(zip(FLOW_COLS, r)) for r in rows]
+
+    def dns(self, sid):
+        with self.lock:
+            rows = self.db.execute(
+                "SELECT %s FROM dns WHERE session_id=? ORDER BY ts" % ",".join(DNS_COLS),
+                (sid,)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(zip(DNS_COLS, r))
+            d["answers"] = json.loads(d["answers"] or "[]")
+            out.append(d)
+        return out
+
+    def delete(self, sid):
+        with self.lock, self.db:
+            for t in ("flows", "dns"):
+                self.db.execute("DELETE FROM %s WHERE session_id=?" % t, (sid,))
+            n = self.db.execute("DELETE FROM sessions WHERE id=?", (sid,)).rowcount
+        return n > 0
+
+    def prune(self, keep):
+        with self.lock:
+            ids = [r[0] for r in self.db.execute(
+                "SELECT id FROM sessions ORDER BY id DESC LIMIT -1 OFFSET ?", (keep,))]
+        for sid in ids:
+            self.delete(sid)
+        if ids:
+            with self.lock:
+                self.db.execute("VACUUM")
+        return ids

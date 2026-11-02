@@ -63,6 +63,40 @@ look like TLS. OpenVPN with `tls-auth`/`tls-crypt` lacks a signature and falls
 back to port. Encrypted BitTorrent (MSE) is only caught by behaviour. QUIC SNI
 is not decrypted.
 
+## IP reputation
+
+Public IPs are checked against free threat feeds. The feeds are downloaded about
+once a day into `/var/lib/spanwatch/feeds/` and matched **locally**, so no
+observed address is sent anywhere for this.
+
+| Highlight | Tier | Feeds |
+|---|---|---|
+| red block, black text | **bad**: high confidence | Spamhaus DROP v4/v6, abuse.ch Feodo Tracker (botnet C2), FireHOL level1 |
+| red outline | **watch**: noisier, often scanners | Emerging Threats block list, CINS Army, blocklist.de |
+| violet outline | **tor**: informational | Tor exit list |
+
+- The highlight shows wherever an IP appears: conversations, DNS (including answers), breakdown lists, graph labels, and the whois panel. Hover an IP to see which lists flagged it.
+- The session meter shows flagged · watch · tor counts. Click it, or type `is:flagged`, to filter. `is:bad`, `is:watch`, `is:tor`, and `is:any` also work, and they apply to CSV/txt exports too. The flows CSV gets `client_rep` / `server_rep` columns.
+- Bogon and private ranges in the feeds (FireHOL level1 includes 10/8 and others) are ignored, so LAN addresses are never flagged.
+- If a download fails or comes back empty, the previous copy is kept. The `feeds n/8` header chip shows each list's size, age, and any error.
+- Disable with `SPANWATCH_ARGS=--no-feeds`.
+
+**AbuseIPDB (optional, on click).** Opening the whois panel for a public IP also
+queries AbuseIPDB: confidence score, report count, usage type, and a link to the
+report page. Results are cached 24h. A score of 75 or more marks the IP **bad**, and
+25 or more marks it **watch**. The free tier allows 1,000 checks a day. To enable it:
+
+```sh
+sudo sh -c 'umask 077; printf %s "YOUR_API_KEY" > /etc/spanwatch/abuseipdb.key'
+sudo systemctl restart spanwatch
+```
+
+The key file is root-only (0600). systemd hands it to the service as a credential
+(`LoadCredential`), so it never appears in the environment or the unit file.
+
+A clean result only means nobody has reported the address yet. A hit on shared
+cloud space is a reason to look closer, not proof of compromise.
+
 ## Whois lookups (outbound traffic)
 
 These are the only thing spanwatch sends off the box, and only when you click.

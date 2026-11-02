@@ -77,7 +77,7 @@ aside h3,.sect h3{margin:0;padding:12px 14px 8px;font-size:10px;letter-spacing:.
 .sess .n{color:var(--amber);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .sess.live .t::after{content:"● live";color:var(--sig);font-size:10px}
 main{overflow:auto;padding:14px 18px 40px}
-.meter{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:1px;background:var(--line2);border:1px solid var(--line2);margin-bottom:12px}
+.meter{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:1px;background:var(--line2);border:1px solid var(--line2);margin-bottom:12px}
 .meter div{background:var(--panel);padding:8px 12px}
 .meter b{display:block;font-size:19px;font-weight:600;color:var(--text);font-variant-numeric:tabular-nums}
 .meter span{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
@@ -102,6 +102,21 @@ td.r,th.r{text-align:right}
 .a-lan{color:var(--sig)}.a-vpn{color:var(--orange)}.a-pub{color:var(--red)}
 #wpanel .wh b.a-vpn{color:var(--orange)}#wpanel .wh b.a-pub{color:var(--red)}
 .gsvg text.a-lan{fill:var(--sig)}.gsvg text.a-vpn{fill:var(--orange)}.gsvg text.a-pub{fill:var(--red)}
+/* reputation: bad = red block / black text, watch = red outline, tor = violet dashed */
+.ip.rep-bad,#wpanel .wh b.rep-bad{background:var(--red);color:#000 !important;padding:0 3px;border-radius:2px;font-weight:600}
+.ip.rep-watch,#wpanel .wh b.rep-watch{box-shadow:inset 0 0 0 1px var(--red);padding:0 3px;border-radius:2px}
+.ip.rep-tor,#wpanel .wh b.rep-tor{box-shadow:inset 0 0 0 1px var(--violet);padding:0 3px;border-radius:2px;border-bottom:0}
+.gsvg text.rep-bad{fill:#000 !important;stroke:none;font-weight:700}
+.gsvg rect.repbg{fill:var(--red);rx:2}
+.gsvg rect.repwatch{fill:none;stroke:var(--red);stroke-width:1.2;rx:2}
+.gsvg rect.reptor{fill:none;stroke:var(--violet);stroke-width:1.2;stroke-dasharray:3 2;rx:2}
+.meter div.flag{cursor:pointer}.meter div.flag b{color:var(--red)}.meter div.flag.zero b{color:var(--faint)}
+.repbox{margin:8px 14px 4px;padding:8px 10px;border:1px solid var(--line2);background:var(--panel2)}
+.repbox.bad{border-color:var(--red);background:rgba(255,93,93,.1)}
+.repbox.watch{border-color:var(--red-d)}
+.repbox .rh{font-weight:600;margin-bottom:4px}
+.repbox .rl{color:var(--dim);font-size:11px;margin:2px 0}
+.score{display:inline-block;padding:0 6px;border-radius:2px;color:#000;font-weight:700}
 .nm{display:block;color:var(--faint);font-size:11px;max-width:300px;overflow:hidden;text-overflow:ellipsis}
 .nm.hn{color:#7fcf9f}
 .svc.hn{color:#7fcf9f}
@@ -286,7 +301,11 @@ function ipClass(ip){
   const r = (m4==null && !m6) ? "lan" : hit(NET_LOCAL) || hit(NET_LAN) ? "lan" : hit(NET_INTERNAL) ? "vpn" : "pub";
   return c[ip] = r;
 }
-const ipSpan = ip => '<span class="ip a-'+ipClass(ip)+'" data-ip="'+esc(ip)+'">'+esc(ip)+'</span>';
+const TIERN = {bad:"FLAGGED (high-confidence list)", watch:"watch list (scanner/attacker reports)", tor:"Tor exit relay"};
+const repOf = ip => (S.flags||{})[ip];
+const repTitle = f => f ? TIERN[f.tier]+": "+f.lists.join(", ") : "";
+const ipSpan = ip => { const f = repOf(ip);
+  return '<span class="ip a-'+ipClass(ip)+(f?" rep-"+f.tier:"")+'" data-ip="'+esc(ip)+'"'+(f?' title="'+esc(repTitle(f))+'"':"")+'>'+esc(ip)+'</span>'; };
 // ipclass-end
 function isPublic(ip){
   ip = String(ip||"").toLowerCase();
@@ -298,14 +317,49 @@ function isPublic(ip){
 }
 const wiBtn = ip => (S.status?.whois && isPublic(ip)) ? '<button class="wi" data-whois="'+esc(ip)+'" title="whois / ARIN">ⓘ</button>' : "";
 async function openWhois(ip, refresh){
-  S.wip = ip; $("#wpanel").hidden = false; $("#wip").textContent = ip; $("#wip").className = "a-"+ipClass(ip);
-  $("#wbody").innerHTML = '<div class="hint" style="padding:14px">querying registries…</div>';
+  S.wip = ip; $("#wpanel").hidden = false; $("#wip").textContent = ip;
+  const f0 = repOf(ip); $("#wip").className = "a-"+ipClass(ip)+(f0?" rep-"+f0.tier:"");
+  $("#wbody").innerHTML = '<div id="wrep"></div><div id="wwho"><div class="hint" style="padding:14px">querying registries…</div></div>';
+  loadRep(ip, refresh);
   try{
     const d = await api("/api/whois?ip="+encodeURIComponent(ip)+(refresh?"&refresh=1":""), {headers:{"X-Spanwatch-Action":"1"}});
     if(S.wip !== ip) return;
-    $("#wbody").innerHTML = whoisHtml(d);
+    $("#wwho").innerHTML = whoisHtml(d);
     if(!d.cached && S.tab === "mix") loadView(true);   // pick up the new org label
-  }catch(e){ if(S.wip === ip) $("#wbody").innerHTML = '<div class="hint" style="padding:14px;color:var(--amber)">'+esc(e.message)+'</div>'; }
+  }catch(e){ if(S.wip === ip) $("#wwho").innerHTML = '<div class="hint" style="padding:14px;color:var(--amber)">'+esc(e.message)+'</div>'; }
+}
+async function loadRep(ip, refresh){
+  let r;
+  try{ r = await api("/api/reputation?ip="+encodeURIComponent(ip)); }catch(e){ return; }
+  if(S.wip !== ip) return;
+  const draw = (ab, aberr) => {
+    const fl = r.flag, cls = fl ? fl.tier : "";
+    let h = '<div class="repbox '+cls+'"><div class="rh">'+(fl ? (fl.tier==="bad"?"⚑ ":"")+esc(TIERN[fl.tier]) : "not on any loaded threat list")+'</div>';
+    for(const f of r.feeds) h += '<div class="rl"><b>'+esc(f.name)+'</b> · '+esc(f.note)+(f.updated?' · list from '+dfmt(f.updated):"")+'</div>';
+    if(ab){
+      const sc = ab.abuseConfidenceScore, col = sc>=75?"var(--red)":sc>=25?"var(--amber)":"var(--sig)";
+      h += '<div class="rl" style="margin-top:6px">AbuseIPDB <span class="score" style="background:'+col+'">'+esc(sc)+'%</span> · '
+        + esc(ab.totalReports)+' reports from '+esc(ab.numDistinctUsers)+' users'+(ab.lastReportedAt?' · last '+esc(String(ab.lastReportedAt).slice(0,10)):"")
+        + (ab.usageType?' · '+esc(ab.usageType):"")+(ab.isTor?' · Tor':"")+(ab.isWhitelisted?' · whitelisted':"")
+        + ' · <a target="_blank" rel="noopener noreferrer" href="https://www.abuseipdb.com/check/'+encodeURIComponent(ip)+'">report page</a></div>';
+    } else if(aberr) h += '<div class="rl" style="color:var(--amber)">AbuseIPDB: '+esc(aberr)+'</div>';
+    else if(!r.abuseipdb_enabled && r.public) h += '<div class="rl">AbuseIPDB not configured (put an API key in /etc/spanwatch/abuseipdb.key)</div>';
+    else if(r.public) h += '<div class="rl">checking AbuseIPDB…</div>';
+    h += '<div class="rl">clean on these lists ≠ safe: they only know reported addresses</div></div>';
+    $("#wrep").innerHTML = h;
+  };
+  draw(r.abuseipdb, null);
+  if(!r.abuseipdb_enabled || !r.public) return;
+  try{
+    const ab = await api("/api/abuseipdb?ip="+encodeURIComponent(ip)+(refresh?"&refresh=1":""), {headers:{"X-Spanwatch-Action":"1"}});
+    if(S.wip !== ip) return;
+    if(!ab.ok){ draw(null, ab.error); return; }
+    r = await api("/api/reputation?ip="+encodeURIComponent(ip));   // tier may change with the score
+    if(S.wip !== ip) return;
+    draw(ab, null);
+    const was = repOf(ip)?.tier || null, now = r.flag?.tier || null;
+    if(was !== now){ $("#wip").className = "a-"+ipClass(ip)+(now?" rep-"+now:""); loadView(true); }
+  }catch(e){ if(S.wip === ip) draw(null, e.message); }
 }
 function whoisHtml(d){
   const r = d.rdap||{}, a = d.asn||{};
@@ -381,6 +435,12 @@ function renderStatus(){
     c.push('<span class="chip '+(f.promisc?"ok":"warn")+'">'+(f.promisc?"promisc":"not promisc")+'</span>');
     c.push('<span class="chip '+(f.tx_packets===0?"ok":"warn")+'" title="packets transmitted by the sniff port since it came up">tx '+num(f.tx_packets)+'</span>');
     if(f.ipv6_disabled===false) c.push('<span class="chip warn">ipv6 on</span>');
+    const rp = st.reputation;
+    if(rp && rp.feeds_enabled){
+      const ok = rp.feeds.filter(x=>x.count && !x.error).length, err = rp.feeds.filter(x=>x.error);
+      const tip = rp.feeds.map(x=>x.name+": "+(x.count?num(x.count)+" entries, "+dfmt(x.updated):"not loaded")+(x.error?" ("+x.error+")":"")).join("\n");
+      c.push('<span class="chip '+(ok===rp.feeds.length?"ok":ok?"warn":"bad")+'" title="'+esc(tip)+'">feeds '+ok+'/'+rp.feeds.length+(rp.abuseipdb?" · abuseipdb":"")+'</span>');
+    }
   }
   $("#chips").innerHTML = c.join("");
   const go = $("#go");
@@ -410,7 +470,7 @@ function renderSessions(){
 $("#sessions").onclick = e => { const d = e.target.closest(".sess"); if(d){ S.sel = +d.dataset.id; renderSessions(); loadView(true) } };
 
 // ---------------------------------------------------------------- meter
-function renderMeter(s){
+function renderMeter(s, fc){
   if(!s){ $("#meter").innerHTML=""; $("#prog").style.width="0"; return; }
   const el = Math.max(s.elapsed, 0.001);
   const live = s.status === "running";
@@ -420,7 +480,10 @@ function renderMeter(s){
     ["conversations", num(s.flow_count)], ["dns", num(s.dns_count)],
     ["kernel drops", num(s.kernel_drops), s.kernel_drops>0],
   ];
-  $("#meter").innerHTML = cells.map(([k,v,hot]) => '<div class="'+(hot?"hot":"")+'"><b>'+v+'</b><span>'+k+'</span></div>').join("");
+  fc = fc || {};
+  const nb = fc.bad||0, nw = fc.watch||0, nt = fc.tor||0;
+  $("#meter").innerHTML = cells.map(([k,v,hot]) => '<div class="'+(hot?"hot":"")+'"><b>'+v+'</b><span>'+k+'</span></div>').join("")
+    + '<div class="flag'+(nb+nw?"":" zero")+'" data-qset="is:flagged" title="click to filter: is:flagged · '+nb+' high-confidence, '+nw+' watch-list, '+nt+' Tor exits"><b>'+nb+' <span style="font-size:13px;color:var(--dim)">· '+nw+' · '+nt+'</span></b><span>flagged · watch · tor</span></div>';
   const pct = s.duration ? Math.min(100, 100*s.elapsed/s.duration) : 100;
   $("#prog").style.width = (live ? pct : 100) + "%";
   $("#prog").style.background = live ? "" : "var(--faint)";
@@ -430,6 +493,7 @@ function renderMeter(s){
 
 // ---------------------------------------------------------------- views
 function setTab(t){ S.tab=t; history.replaceState(null,"","#"+t); document.querySelectorAll("#tabs button[data-t]").forEach(b=>b.classList.toggle("sel", b.dataset.t===t)); }
+$("#meter").onclick = e => { const c = e.target.closest("[data-qset]"); if(c) setQ(c.dataset.qset, true); };
 $("#tabs").onclick = e => { const t = e.target.dataset?.t; if(t){ setTab(t); loadView(true) } };
 if(["flows","dns","mix","hosts"].includes(location.hash.slice(1))) setTab(location.hash.slice(1));
 // ---------------------------------------------------------------- filter box
@@ -566,7 +630,9 @@ function hist(title, rows, fmt, cls="", labeler){
 function mixView(d){
   const b = d.breakdown || {}, i = d.insights || {};
   const protos = (b.protos||[]).map(p=>({key:p.proto, value:p.bytes, pk:p.packets}));
+  const fl = d.flagged || [];
   return '<div class="grid">'
+    + (fl.length ? hist("Flagged IPs ("+fl.length+")", fl.map(r=>({...r, value: r.value||1})), v => v>1?bytes(v):"", "", r => ipSpan(r.key)+wiBtn(r.key)+' <span class="svc">'+esc(r.lists.join(", "))+'</span>') : "")
     + hist("Top talkers (bytes)", i.talkers, bytes, "", r => ipSpan(r.key)+wiBtn(r.key)+(r.host?' <span class="svc hn">'+esc(r.host)+'</span>':r.name?' <span class="svc">'+esc(r.name)+'</span>':r.org?' <span class="svc org">'+esc(r.org)+'</span>':""))
     + hist("Protocols (bytes)", protos, bytes)
     + hist("Services (bytes)", i.services, bytes)
@@ -583,7 +649,8 @@ function mixView(d){
 function graphShell(){
   const seg = (attr, cur, opts) => '<div class="seg">'+opts.map(([v,l])=>'<button data-'+attr+'="'+v+'" class="'+(v===cur?"sel":"")+'">'+l+'</button>').join("")+'</div>';
   const cats = Object.keys(CATN).map(c=>'<span><i style="background:'+CATC[c]+'"></i>'+CATN[c]+'</span>').join("");
-  const kinds = [["lan","LAN / localhost"],["vpn","internal / VPN"],["pub","public"]].map(([k,l])=>'<span><b style="background:'+ACLR[k]+'"></b>'+l+'</span>').join("");
+  const kinds = [["lan","LAN / localhost"],["vpn","internal / VPN"],["pub","public"]].map(([k,l])=>'<span><b style="background:'+ACLR[k]+'"></b>'+l+'</span>').join("")
+    + '<span><b style="background:var(--red);border-radius:2px;box-shadow:0 0 0 2px #000 inset"></b>flagged</span><span><b style="border:1px solid var(--red);background:none;border-radius:2px"></b>watch</span><span><b style="border:1px dashed var(--violet);background:none;border-radius:2px"></b>tor</span>';
   return '<div class="sect gsect"><h3>IP relationships <span class="sub">line width = occurrences seen, 1px (least) → 6px (most) · scroll to zoom · drag background to pan · double-click to reset · click node = filter · right-click node = whois</span></h3>'
     + '<div class="gctl">'+seg("gm",S.gm,[["packets","packets"],["conns","conversations"],["bytes","bytes"]])
     + seg("gs",S.gs,[["log","log"],["linear","linear"]])
@@ -667,14 +734,20 @@ function drawGraph(){
     s += '<line data-e="'+i+'" stroke="'+CATC[catOf(e.guess)]+'" stroke-width="'+e.w.toFixed(2)+'">'
       + '<title>'+esc(e.a+"  ⇄  "+e.b+"\n"+metricTxt(e)+"\n"+e.labels.join("\n"))+'</title></line>'; });
   nodes.forEach(n => {
-    const show = labelled.has(n.id) ? "" : " hide", sub = n.host || n.name || n.org || "";
+    const nf = repOf(n.id), show = (labelled.has(n.id) || nf) ? "" : " hide", sub = n.host || n.name || n.org || "";
     s += '<g class="nd" data-n="'+esc(n.id)+'">'
-      + '<circle r="'+n.r.toFixed(1)+'" fill="'+ACLR[ipClass(n.id)]+'"/>'
-      + '<text class="a-'+ipClass(n.id)+show+'" x="'+(n.r+4).toFixed(1)+'" y="4">'+esc(n.id)+'</text>'
+      + '<circle r="'+n.r.toFixed(1)+'" fill="'+ACLR[ipClass(n.id)]+'"'+(nf&&nf.tier!=="tor"?' style="stroke:var(--red);stroke-width:3"':"")+'/>'
+      + '<text class="a-'+ipClass(n.id)+(nf?" rep-"+nf.tier:"")+show+'" x="'+(n.r+4).toFixed(1)+'" y="4">'+esc(n.id)+'</text>'
       + (sub ? '<text class="sub'+(n.host?" hn":n.name?"":" org")+show+'" x="'+(n.r+4).toFixed(1)+'" y="18">'+esc(sub.length>34?sub.slice(0,33)+"…":sub)+'</text>' : "")
       + '<title>'+esc(n.id+(n.host?"\nhost: "+n.host:"")+(n.name?"\n"+n.name:"")+(n.org?"\norg: "+n.org:"")+"\n"+({lan:"LAN/localhost",vpn:"internal/VPN",pub:"public"})[ipClass(n.id)]+" · "+num(n.packets)+" pkts · "+bytes(n.bytes)+" · "+adj[n.id].length+" peers"+(isPublic(n.id)?"\nright-click: whois":""))+'</title></g>'; });
   box.innerHTML = s + '</svg><div class="zbar"><button data-gz="in" title="zoom in">+</button><button data-gz="out" title="zoom out">−</button><button data-gz="reset" title="reset view">fit</button><span id="zlab"></span></div>';
 
+  box.querySelectorAll("text.rep-bad,text.rep-watch,text.rep-tor").forEach(t => {
+    const bb = t.getBBox(), r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    r.setAttribute("x", bb.x-3); r.setAttribute("y", bb.y-1); r.setAttribute("width", bb.width+6); r.setAttribute("height", bb.height+2);
+    r.setAttribute("class", t.classList.contains("rep-bad") ? "repbg" : t.classList.contains("rep-watch") ? "repwatch" : "reptor");
+    t.parentNode.insertBefore(r, t);
+  });
   const svg = box.querySelector("svg"), lines = svg.querySelectorAll("line"), gEls = {};
   svg.querySelectorAll(".nd").forEach(g => gEls[g.dataset.n] = g);
   const place = () => {
@@ -767,7 +840,8 @@ async function loadView(force){
   const base = "/api/sessions/"+S.sel, q = encodeURIComponent(S.q);
   try{
     const sum = await api(base);
-    renderMeter(sum.session);
+    S.flags = sum.flags || {};
+    renderMeter(sum.session, sum.flag_counts);
     let html, count = "";
     if(S.tab === "flows"){
       const d = await api(base+"/flows?limit=1000&sort="+S.sort+"&q="+q);

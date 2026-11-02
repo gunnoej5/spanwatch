@@ -18,6 +18,7 @@ from .server import App, serve
 from .session import Session
 from .store import Store
 from .whois import Whois
+from .reputation import Reputation, Feeds, AbuseIPDB, load_key
 
 
 def _data_dir(p):
@@ -53,6 +54,10 @@ def main(argv=None):
     sv.add_argument("--hosts-file", default="/etc/spanwatch/hosts",
                     help="/etc/hosts-format overrides for learned local hostnames "
                          "(optional; re-read when it changes)")
+    sv.add_argument("--no-feeds", action="store_true",
+                    help="disable daily threat-feed downloads (reputation flags)")
+    sv.add_argument("--abuseipdb-key-file", default="/etc/spanwatch/abuseipdb.key",
+                    help="AbuseIPDB API key file (systemd passes it as a credential)")
     sv.add_argument("--no-whois", action="store_true",
                     help="disable on-demand RDAP/Cymru lookups (no outbound traffic)")
 
@@ -98,9 +103,12 @@ def main(argv=None):
         return 0
 
     host, _, port = a.listen.rpartition(":")
+    feeds = Feeds(_data_dir(a.data), enabled=not a.no_feeds)
+    reputation = Reputation(feeds, AbuseIPDB(store, load_key(a.abuseipdb_key_file)))
     app = App(store, a.iface, _ports(a.dns_ports), a.max_duration, a.keep, a.allow_addressed,
               whois=Whois(store, enabled=not a.no_whois), lan=a.lan,
-              hosts_file=a.hosts_file or None)
+              hosts_file=a.hosts_file or None, reputation=reputation)
+    feeds.start()
     httpd = serve(app, host.strip("[]"), int(port), a.allow_host)
 
     def bye(*_):

@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS dns (
 );
 CREATE INDEX IF NOT EXISTS dns_sid ON dns(session_id);
 CREATE TABLE IF NOT EXISTS whois (ip TEXT PRIMARY KEY, ts REAL, data TEXT);
+CREATE TABLE IF NOT EXISTS kv (ns TEXT, k TEXT, ts REAL, data TEXT, PRIMARY KEY (ns, k));
 CREATE TABLE IF NOT EXISTS host_obs (
   mac TEXT, ip TEXT, name TEXT, source TEXT, first REAL, last REAL, hits INTEGER,
   PRIMARY KEY (mac, ip, name, source)
@@ -160,6 +161,22 @@ class Store:
             except ValueError:
                 pass
         return out
+
+    def kv_all(self, ns):
+        with self.lock:
+            rows = self.db.execute("SELECT k, data FROM kv WHERE ns=?", (ns,)).fetchall()
+        out = {}
+        for k, data in rows:
+            try:
+                out[k] = json.loads(data)
+            except ValueError:
+                pass
+        return out
+
+    def kv_put(self, ns, k, d):
+        with self.lock, self.db:
+            self.db.execute("INSERT OR REPLACE INTO kv VALUES (?,?,?,?)",
+                            (ns, k, d.get("ts", 0), json.dumps(d)))
 
     def whois_put(self, ip, d):
         with self.lock, self.db:

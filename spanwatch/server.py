@@ -16,6 +16,10 @@ from .capture import LiveCapture
 from .hostnames import Directory, hosts_text
 from .session import Session
 from .whois import Whois
+from .reputation import Reputation, Feeds, AbuseIPDB, TIER_RANK
+
+REP_KEYWORDS = {"is:flagged": ("bad", "watch"), "is:bad": ("bad",), "is:watch": ("watch",),
+                "is:tor": ("tor",), "is:any": ("bad", "watch", "tor")}
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
@@ -28,7 +32,8 @@ class ApiError(Exception):
 
 class App:
     def __init__(self, store, iface, dns_ports=(53,), max_duration=3600,
-                 keep=50, allow_addressed=False, whois=None, lan=(), hosts_file=None):
+                 keep=50, allow_addressed=False, whois=None, lan=(), hosts_file=None,
+                 reputation=None):
         self.store = store
         self.iface = iface
         self.dns_ports = tuple(dns_ports)
@@ -36,6 +41,7 @@ class App:
         self.keep = keep
         self.allow_addressed = allow_addressed
         self.whois = whois if whois is not None else Whois(store, enabled=False)
+        self.rep = reputation or Reputation(Feeds(None, enabled=False), AbuseIPDB(None))
         self.lan_extra = list(lan)
         self._lan = (0.0, [])
         self.current = None
@@ -128,6 +134,34 @@ class App:
         return [dict(d, client_host=hn.get(d["client"], ""), resolver_host=hn.get(d["resolver"], ""))
                 for d in rows]
 
+    def session_ips(self, flows, dns):
+        ips = set()
+        for f in flows:
+            ips.add(f["client"])
+            ips.add(f["server"])
+        for d in dns:
+            ips.add(d["client"])
+            ips.add(d["resolver"])
+            for a in d["answers"]:
+                if a and " " not in a:
+                    ips.add(a)
+        return ips
+
+    def rep_filter(self, rows, q, fields):
+        """'is:flagged' style keywords filter on reputation instead of text."""
+        tiers = REP_KEYWORDS.get(q.strip().lower())
+        if tiers is None:
+            return rows, q
+        def hit(r):
+            for k in fields:
+                vals = r.get(k)
+                for ip in (vals if isinstance(vals, list) else [vals]):
+                    fl = self.rep.flag(ip) if ip else None
+                    if fl and fl["tier"] in tiers:
+                        return True
+            return False
+        return [r for r in rows if hit(r)], ""
+
     def lan(self):
         ts, nets = self._lan
         if time.time() - ts > 60:
@@ -143,6 +177,8 @@ class App:
             "current": cur.summary() if cur else None,
             "max_duration": self.max_duration, "dns_ports": list(self.dns_ports),
             "whois": self.whois.enabled, "lan": self.lan(),
+            "reputation": {"feeds": self.rep.feeds.status(), "feeds_enabled": self.rep.feeds.enabled,
+                           "abuseipdb": self.rep.abuse.enabled},
             "host": os.uname().nodename, "now": time.time(),
         }
 
@@ -343,6 +379,20 @@ class Handler(BaseHTTPRequestHandler):
             if cur and not cur.saved:
                 sessions.insert(0, cur.summary())
             return self._send(200, {"sessions": sessions})
+        if path == "/api/reputation":
+            ip = qs.get("ip", "").strip()
+            return self._send(200, app.rep.detail(ip))
+        if path == "/api/abuseipdb":
+            if self.headers.get("X-Spanwatch-Action") is None:
+                raise ApiError(403, "missing X-Spanwatch-Action header")
+            try:
+                return self._send(200, app.rep.abuse.lookup(qs.get("ip", ""), qs.get("refresh") == "1"))
+            except PermissionError as e:
+                raise ApiError(409, str(e))
+            except LookupError as e:
+                raise ApiError(422, str(e))
+            except ValueError:
+                raise ApiError(400, "not an IP address")
         if path == "/api/whois":
             # triggers outbound traffic, so it needs the same header as mutations
             if self.headers.get("X-Spanwatch-Action") is None:
@@ -363,15 +413,29 @@ class Handler(BaseHTTPRequestHandler):
         q = qs.get("q", "")
         if what == "summary":
             s, bd = app.summary(sid)
-            return self._send(200, {"session": s, "breakdown": bd,
-                                    "insights": insights(app.flows(sid), app.dns(sid), org=app.whois.short)})
+            flows, dns = app.flows(sid), app.dns(sid)
+            flags = app.rep.flags(app.session_ips(flows, dns))
+            vol = Counter()
+            for f in flows:
+                for ip in (f["client"], f["server"]):
+                    if ip in flags:
+                        vol[ip] += f["bytes_cs"] + f["bytes_sc"]
+            flagged = sorted(({"key": ip, "value": vol.get(ip, 0), "tier": fl["tier"], "lists": fl["lists"]}
+                              for ip, fl in flags.items()),
+                             key=lambda r: (-TIER_RANK[r["tier"]], -r["value"]))
+            counts = Counter(fl["tier"] for fl in flags.values())
+            return self._send(200, {"session": s, "breakdown": bd, "flags": flags,
+                                    "flag_counts": dict(counts), "flagged": flagged[:50],
+                                    "insights": insights(flows, dns, org=app.whois.short)})
         if what == "flows":
             app.summary(sid)
-            total, rows = filter_flows(app.flows(sid), q, qs.get("sort", "bytes"), limit)
+            rows, fq = app.rep_filter(app.flows(sid), q, ("client", "server"))
+            total, rows = filter_flows(rows, fq, qs.get("sort", "bytes"), limit)
             return self._send(200, {"total": total, "rows": rows})
         if what == "graph":
             app.summary(sid)
-            _, rows = filter_flows(app.flows(sid), q, "pkts", 10**9)
+            rows, fq = app.rep_filter(app.flows(sid), q, ("client", "server"))
+            _, rows = filter_flows(rows, fq, "pkts", 10**9)
             glimit = max(1, min(int(qs.get("limit", 150)), 400))
             g = build_graph(rows, glimit)
             hn = app.hosts.lookup()
@@ -381,26 +445,34 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, g)
         if what == "dns":
             app.summary(sid)
-            total, rows = filter_dns(app.dns(sid), q, limit)
+            rows, fq = app.rep_filter(app.dns(sid), q, ("client", "resolver", "answers"))
+            total, rows = filter_dns(rows, fq, limit)
             return self._send(200, {"total": total, "rows": rows})
         # exports: unfiltered unless q given, no row limit
         fn = "spanwatch-%d-%s" % (sid, what.replace(".", "-"))
         disp = {"Content-Disposition": 'attachment; filename="%s.%s"' % (fn, what.split(".")[1])}
         app.summary(sid)
         if what == "dns.txt":
-            _, rows = filter_dns(app.dns(sid), q, 10**9)
+            rows, fq = app.rep_filter(app.dns(sid), q, ("client", "resolver", "answers"))
+            _, rows = filter_dns(rows, fq, 10**9)
             txt = "\n".join(dns_line(d) for d in reversed(rows)) + "\n"
             return self._send(200, txt.encode(), "text/plain; charset=utf-8", disp)
         buf = io.StringIO()
         w = csv.writer(buf)
         if what == "flows.csv":
-            _, rows = filter_flows(app.flows(sid), q, qs.get("sort", "bytes"), 10**9)
+            rows, fq = app.rep_filter(app.flows(sid), q, ("client", "server"))
+            _, rows = filter_flows(rows, fq, qs.get("sort", "bytes"), 10**9)
+            for r in rows:
+                for side in ("client", "server"):
+                    fl = app.rep.flag(r[side])
+                    r[side + "_rep"] = ("%s:%s" % (fl["tier"], "+".join(fl["lists"]))) if fl else ""
             cols = ["client", "client_host", "client_name", "server", "server_host", "server_name",
                     "proto", "port",
                     "service", "guess", "conf", "detail", "pkts_cs", "bytes_cs", "pkts_sc",
-                    "bytes_sc", "first", "last"]
+                    "bytes_sc", "first", "last", "client_rep", "server_rep"]
         else:
-            _, rows = filter_dns(app.dns(sid), q, 10**9)
+            rows, fq = app.rep_filter(app.dns(sid), q, ("client", "resolver", "answers"))
+            _, rows = filter_dns(rows, fq, 10**9)
             rows = rows[::-1]
             cols = ["ts", "client", "client_host", "resolver", "qtype", "qname", "rcode", "ms",
                     "ttl", "answers"]

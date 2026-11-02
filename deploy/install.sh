@@ -27,6 +27,8 @@ sync_code() {
 }
 
 install_units() {
+  install -d -m 0755 /etc/spanwatch
+  [ -e /etc/spanwatch/abuseipdb.key ] || install -m 0600 -o root -g root /dev/null /etc/spanwatch/abuseipdb.key
   install -m 0755 "$SRC/deploy/spanwatch-iface" /usr/local/sbin/spanwatch-iface
   install -m 0644 "$SRC/deploy/spanwatch-iface@.service" "$SRC/deploy/spanwatch.service" /etc/systemd/system/
   systemctl daemon-reload

@@ -14,6 +14,8 @@ RestartSec=3
 # --- least privilege: throwaway unprivileged user holding exactly CAP_NET_RAW
 DynamicUser=yes
 StateDirectory=spanwatch
+# AbuseIPDB key: root-only file, handed to the DynamicUser as a credential
+LoadCredential=abuseipdb:/etc/spanwatch/abuseipdb.key
 AmbientCapabilities=CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_RAW
 NoNewPrivileges=yes

@@ -1,5 +1,7 @@
 # spanwatch
 
+![spanwatch dashboard: breakdown, IP relationship graph, and whois quick view](docs/screenshot.png)
+
 Passive LAN traffic summarizer for a switch **SPAN / mirror port**. It runs short,
 bounded capture sessions on a dedicated, address-less sniff NIC and summarizes them
 in a small local dashboard:
@@ -32,6 +34,10 @@ in a small local dashboard:
   ULA, Docker); red for public. "Local LAN" is the subnet of whichever interface
   holds the default route, detected automatically. Add more with
   `SPANWATCH_ARGS=--lan 10.20.0.0/16` (repeatable).
+- **Filter box**: matches IP, port, protocol, name, or guess. ✕ (or Esc) clears it,
+  ☆ saves it, and ▾ (or ↓) opens a picker of saved and recent filters. Clicking an
+  IP or using whois "filter" also adds to recent. Saved and recent filters are stored
+  in this browser's localStorage only.
 - Export CSV, plus DNS as plain text.
 
 There are no third-party dependencies, only Python 3 stdlib. Capture uses

@@ -41,6 +41,27 @@ header{grid-column:1/3;display:flex;align-items:center;gap:18px;padding:10px 16p
 .seg button.sel{color:var(--ink);background:var(--sig)}
 input[type=text]{background:var(--ink);border:1px solid var(--line2);color:var(--text);font:inherit;padding:4px 8px;outline:none}
 input[type=text]:focus{border-color:var(--sig-d)}
+.qbox{position:relative;display:flex;align-items:stretch;border:1px solid var(--line2);background:var(--ink)}
+.qbox:focus-within{border-color:var(--sig-d)}
+.qbox input[type=text]{border:0;padding-right:2px;min-width:0}
+.qbox button{background:none;border:0;border-left:1px solid var(--line);color:var(--faint);font:inherit;font-size:12px;width:26px;cursor:pointer;padding:0}
+.qbox button:hover{color:var(--text)}
+.qbox button:disabled{opacity:.35;cursor:default}
+.qbox button.on{color:var(--amber)}
+.qbox #qx{border-left:0}
+.qbox #qx[hidden]{display:none}
+#qmenu{position:absolute;right:-1px;top:calc(100% + 3px);width:340px;max-width:90vw;max-height:60vh;overflow:auto;background:var(--panel);border:1px solid var(--line2);box-shadow:0 12px 30px rgba(0,0,0,.5);z-index:7}
+#qmenu h4{margin:0;padding:8px 10px 4px;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--faint);font-weight:600;display:flex;justify-content:space-between}
+#qmenu h4 a{letter-spacing:0;text-transform:none;color:var(--faint);cursor:pointer;font-weight:400}
+#qmenu h4 a:hover{color:var(--red)}
+.qi{display:flex;align-items:center;gap:6px;padding:4px 10px;cursor:pointer;color:var(--text)}
+.qi:hover,.qi.act{background:var(--panel2)}
+.qi .t{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.qi .k{color:var(--faint);font-size:11px}
+.qi.cur .t{color:var(--sig)}
+.qi .rm{color:var(--faint);padding:0 4px}
+.qi .rm:hover{color:var(--red)}
+#qmenu .none{padding:4px 10px 8px;color:var(--faint);font-size:11px}
 .btn{font:inherit;font-weight:700;letter-spacing:.08em;text-transform:uppercase;font-size:11px;padding:5px 14px;cursor:pointer;border:1px solid var(--sig);background:var(--sig);color:var(--ink)}
 .btn.stop{background:var(--red);border-color:var(--red)}
 .btn.ghost{background:none;color:var(--dim);border-color:var(--line2);font-weight:400;letter-spacing:0;text-transform:none}
@@ -178,7 +199,13 @@ td.r,th.r{text-align:right}
     <button data-t="hosts" title="local hostnames learned passively from DHCP, mDNS, NetBIOS, LLMNR (all sessions)">Hosts</button>
     <div class="tools">
       <span class="count" id="count"></span>
-      <input type="text" id="q" placeholder="filter: ip, port, proto, name…" size="30">
+      <div class="qbox" id="qbox">
+        <input type="text" id="q" placeholder="filter: ip, port, proto, name…" size="30" autocomplete="off" spellcheck="false">
+        <button id="qx" title="clear filter (Esc)" hidden>✕</button>
+        <button id="qsave" title="save this filter">☆</button>
+        <button id="qhist" title="saved &amp; recent filters (↓)">▾</button>
+        <div id="qmenu" hidden></div>
+      </div>
       <a class="btn ghost" id="exp1" href="#">csv</a>
       <a class="btn ghost" id="exp2" href="#" style="display:none">txt</a>
       <button class="btn ghost" id="del" title="delete session">delete</button>
@@ -308,7 +335,7 @@ function whoisHtml(d){
 }
 $("#wx").onclick = () => { $("#wpanel").hidden = true; S.wip = null; };
 $("#wref").onclick = () => S.wip && openWhois(S.wip, true);
-$("#wfil").onclick = () => { if(!S.wip) return; $("#q").value = S.wip; S.q = S.wip; loadView(true); };
+$("#wfil").onclick = () => { if(!S.wip) return; setQ(S.wip, true); };
 document.addEventListener("keydown", e => { if(e.key === "Escape" && !$("#wpanel").hidden) $("#wx").onclick(); });
 
 function guessCell(f){
@@ -405,7 +432,87 @@ function renderMeter(s){
 function setTab(t){ S.tab=t; history.replaceState(null,"","#"+t); document.querySelectorAll("#tabs button[data-t]").forEach(b=>b.classList.toggle("sel", b.dataset.t===t)); }
 $("#tabs").onclick = e => { const t = e.target.dataset?.t; if(t){ setTab(t); loadView(true) } };
 if(["flows","dns","mix","hosts"].includes(location.hash.slice(1))) setTab(location.hash.slice(1));
-let qT; $("#q").oninput = e => { clearTimeout(qT); qT = setTimeout(()=>{ S.q = e.target.value; loadView(true) }, 220) };
+// ---------------------------------------------------------------- filter box
+// Saved + recent filters live in this browser's localStorage (nothing server-side).
+const QK = {saved: "spanwatch.filters.saved", recent: "spanwatch.filters.recent"};
+const QMAX = 15;
+function qload(k){ try{ const v = JSON.parse(localStorage.getItem(QK[k]) || "[]"); return Array.isArray(v) ? v.filter(x => typeof x === "string") : []; }catch(e){ return []; } }
+function qstore(k, list){ try{ localStorage.setItem(QK[k], JSON.stringify(list)); }catch(e){} }
+function qrecord(v){
+  v = String(v||"").trim(); if(!v) return;
+  qstore("recent", [v, ...qload("recent").filter(x => x !== v)].slice(0, QMAX));
+}
+function qchrome(){
+  const v = $("#q").value.trim(), saved = qload("saved").includes(v);
+  $("#qx").hidden = !$("#q").value;
+  const b = $("#qsave");
+  b.textContent = saved ? "★" : "☆"; b.classList.toggle("on", saved);
+  b.title = saved ? "remove from saved filters" : "save this filter";
+  b.disabled = !v;
+}
+let qT, qRecT;
+function setQ(v, record){
+  v = String(v ?? "");
+  clearTimeout(qT); clearTimeout(qRecT);
+  $("#q").value = v; S.q = v; qchrome();
+  if(record) qrecord(v);
+  loadView(true);
+}
+$("#q").oninput = e => {
+  qchrome();
+  clearTimeout(qT); clearTimeout(qRecT);
+  qT = setTimeout(() => { S.q = e.target.value; loadView(true) }, 220);
+  qRecT = setTimeout(() => qrecord(e.target.value), 2000);   // settled typing counts as "used"
+  if(!$("#qmenu").hidden) qmenu(true);
+};
+$("#qx").onclick = () => { setQ(""); $("#q").focus(); };
+$("#qsave").onclick = () => {
+  const v = $("#q").value.trim(); if(!v) return;
+  const list = qload("saved");
+  qstore("saved", list.includes(v) ? list.filter(x => x !== v) : [v, ...list]);
+  qrecord(v); qchrome();
+  if(!$("#qmenu").hidden) qmenu(true);
+};
+let qAct = -1;
+function qmenu(open){
+  const m = $("#qmenu");
+  if(!open){ m.hidden = true; qAct = -1; return; }
+  const cur = $("#q").value.trim(), typed = cur.toLowerCase();
+  const saved = qload("saved"), recent = qload("recent").filter(x => !saved.includes(x));
+  // while typing, narrow the lists; an exact current value still shows
+  const match = x => !typed || x.toLowerCase().includes(typed);
+  const item = (x, kind) => '<div class="qi'+(x===cur?" cur":"")+'" data-qv="'+esc(x)+'"><span class="k">'+(kind==="saved"?"★":"↺")+'</span><span class="t" title="'+esc(x)+'">'+esc(x)+'</span>'
+    + '<span class="rm" data-qrm="'+kind+'" title="'+(kind==="saved"?"unsave":"forget")+'">✕</span></div>';
+  const sv = saved.filter(match), rc = recent.filter(match);
+  m.innerHTML = '<h4>saved</h4>' + (sv.length ? sv.map(x=>item(x,"saved")).join("") : '<div class="none">'+(saved.length?"no match":"none yet: type a filter and hit ☆")+'</div>')
+    + '<h4>recent'+(recent.length?' <a data-qclear="1">clear</a>':"")+'</h4>' + (rc.length ? rc.map(x=>item(x,"recent")).join("") : '<div class="none">'+(recent.length?"no match":"nothing yet")+'</div>');
+  m.hidden = false; qAct = -1;
+}
+$("#qhist").onclick = e => { e.stopPropagation(); qmenu($("#qmenu").hidden); };
+$("#qmenu").addEventListener("mousedown", e => e.preventDefault());   // keep input focus
+$("#qmenu").onclick = e => {
+  e.stopPropagation();
+  if(e.target.dataset.qclear){ qstore("recent", []); qmenu(true); return; }
+  const rm = e.target.closest("[data-qrm]");
+  if(rm){ const v = rm.parentElement.dataset.qv, k = rm.dataset.qrm; qstore(k, qload(k).filter(x => x !== v)); qchrome(); qmenu(true); return; }
+  const it = e.target.closest("[data-qv]");
+  if(it){ setQ(it.dataset.qv, true); qmenu(false); }
+};
+document.addEventListener("click", e => { if(!e.target.closest("#qbox")) qmenu(false); });
+window.addEventListener("storage", () => { qchrome(); if(!$("#qmenu").hidden) qmenu(true); });   // other tabs
+$("#q").addEventListener("keydown", e => {
+  const m = $("#qmenu"), items = [...m.querySelectorAll(".qi")];
+  const mark = () => { items.forEach((x,i)=>x.classList.toggle("act", i===qAct)); items[qAct]?.scrollIntoView({block:"nearest"}); };
+  if(e.key === "ArrowDown"){ e.preventDefault(); if(m.hidden){ qmenu(true); return; } qAct = Math.min(items.length-1, qAct+1); mark(); }
+  else if(e.key === "ArrowUp" && !m.hidden){ e.preventDefault(); qAct = Math.max(0, qAct-1); mark(); }
+  else if(e.key === "Enter"){ e.preventDefault();
+    if(!m.hidden && items[qAct]) setQ(items[qAct].dataset.qv, true); else setQ($("#q").value, true);
+    qmenu(false); }
+  else if(e.key === "Escape"){
+    e.stopPropagation();
+    if(!m.hidden) qmenu(false); else if($("#q").value) setQ(""); else $("#q").blur(); }
+});
+qchrome();
 $("#del").onclick = async () => {
   if(S.sel==null || !confirm("Delete session #"+S.sel+"?")) return;
   try{ await api("/api/sessions/"+S.sel, {method:"DELETE", headers:{"X-Spanwatch-Action":"1"}}); S.sel=null; await tick(true) }catch(e){ oops(e.message) }
@@ -419,7 +526,7 @@ $("#view").onclick = e => {
   const w = e.target.closest("[data-whois]"); if(w){ openWhois(w.dataset.whois); return; }
   const z = e.target.closest("[data-gz]");
   if(z){ if(z.dataset.gz === "reset"){ Object.assign(S.zoom, {k:1,tx:0,ty:0}); S.gplace && S.gplace(); } else zoomBy(z.dataset.gz === "in" ? 1.4 : 1/1.4); return; }
-  const ip = e.target.dataset?.ip; if(ip){ $("#q").value = ip; S.q = ip; loadView(true); return; }
+  const ip = e.target.dataset?.ip; if(ip){ setQ(ip, true); return; }
   const s = e.target.closest("th[data-sort]"); if(s){ S.sort = s.dataset.sort; loadView(true); return; }
   const b = e.target.closest("[data-gm],[data-gs],[data-relayout]");
   if(b){ if(b.dataset.gm) S.gm=b.dataset.gm; if(b.dataset.gs) S.gs=b.dataset.gs; if(b.dataset.relayout!=null){ S.pos={}; Object.assign(S.zoom, {k:1,tx:0,ty:0}); }
@@ -613,7 +720,7 @@ function drawGraph(){
     S.pos[n.id] = {x:n.x/W, y:n.y/H};
     place(); });
   const end = () => { const dr = S.drag; S.drag = null; svg.classList.remove("panning"); if(!dr) return;
-    if(!dr.pan && !dr.moved){ const ip = S.q===dr.id ? "" : dr.id; $("#q").value = ip; S.q = ip; loadView(true); } };
+    if(!dr.pan && !dr.moved){ setQ(S.q===dr.id ? "" : dr.id, S.q!==dr.id); } };
   svg.addEventListener("pointerup", end);
   svg.addEventListener("pointercancel", () => { S.drag = null; svg.classList.remove("panning"); });
 }

@@ -651,7 +651,7 @@ function graphShell(){
   const cats = Object.keys(CATN).map(c=>'<span><i style="background:'+CATC[c]+'"></i>'+CATN[c]+'</span>').join("");
   const kinds = [["lan","LAN / localhost"],["vpn","internal / VPN"],["pub","public"]].map(([k,l])=>'<span><b style="background:'+ACLR[k]+'"></b>'+l+'</span>').join("")
     + '<span><b style="background:var(--red);border-radius:2px;box-shadow:0 0 0 2px #000 inset"></b>flagged</span><span><b style="border:1px solid var(--red);background:none;border-radius:2px"></b>watch</span><span><b style="border:1px dashed var(--violet);background:none;border-radius:2px"></b>tor</span>';
-  return '<div class="sect gsect"><h3>IP relationships <span class="sub">line width = occurrences seen, 1px (least) → 6px (most) · scroll to zoom · drag background to pan · double-click to reset · click node = filter · right-click node = whois</span></h3>'
+  return '<div class="sect gsect"><h3>IP relationships <span class="sub">line width = occurrences seen, 1px (least) → 6px (most) · drag node = move it · shift-drag = move with its leaf peers · alt-drag = move with all peers · scroll to zoom · drag background to pan · double-click to reset · click node = filter · right-click node = whois</span></h3>'
     + '<div class="gctl">'+seg("gm",S.gm,[["packets","packets"],["conns","conversations"],["bytes","bytes"]])
     + seg("gs",S.gs,[["log","log"],["linear","linear"]])
     + '<button class="btn ghost" data-relayout="1">re-layout</button>'
@@ -780,7 +780,20 @@ function drawGraph(){
   svg.addEventListener("pointerdown", e => {
     if(e.button !== 0) return;
     const g = e.target.closest(".nd");
-    S.drag = g ? {id:g.dataset.n, x0:e.clientX, y0:e.clientY, moved:false}
+    let grp = null;
+    if(g){
+      // shift = node + leaf neighbours (connected only to it); alt = node + every direct neighbour
+      const id = g.dataset.n;
+      if(e.shiftKey || e.altKey){
+        const nb = new Set();
+        for(const i of adj[id]){ const ed = edges[i], o = ed.a === id ? ed.b : ed.a;
+          if(e.altKey || adj[o].length === 1) nb.add(o); }
+        nb.add(id);
+        grp = [...nb].map(k => ({id:k, x:idx[k].x, y:idx[k].y}));
+        e.preventDefault();
+      }
+    }
+    S.drag = g ? {id:g.dataset.n, x0:e.clientX, y0:e.clientY, moved:false, grp}
                : {pan:true, x0:e.clientX, y0:e.clientY, tx0:Z.tx, ty0:Z.ty, moved:false};
     svg.setPointerCapture(e.pointerId);
     svg.classList.add("panning");
@@ -789,6 +802,11 @@ function drawGraph(){
     if(Math.abs(e.clientX-dr.x0)+Math.abs(e.clientY-dr.y0) > 3) dr.moved = true;
     if(!dr.moved) return;
     if(dr.pan){ Z.tx = dr.tx0 + e.clientX - dr.x0; Z.ty = dr.ty0 + e.clientY - dr.y0; place(); return; }
+    if(dr.grp){
+      const dx = (e.clientX - dr.x0)/Z.k, dy = (e.clientY - dr.y0)/Z.k;
+      for(const m of dr.grp){ const n = idx[m.id]; n.x = m.x + dx; n.y = m.y + dy; S.pos[n.id] = {x:n.x/W, y:n.y/H}; }
+      place(); return;
+    }
     const r = svg.getBoundingClientRect(), n = idx[dr.id];
     n.x = (e.clientX - r.left - Z.tx)/Z.k; n.y = (e.clientY - r.top - Z.ty)/Z.k;
     S.pos[n.id] = {x:n.x/W, y:n.y/H};

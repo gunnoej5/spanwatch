@@ -712,7 +712,8 @@ function drawGraph(){
   S.gplace = null;
   if(!d.edges.length){ box.innerHTML = '<div class="empty">no IP pairs'+(S.q?" match":" yet")+'</div>'; return; }
   const W = Math.max(box.clientWidth, 320);
-  const H = Math.round(Math.max(380, Math.min(window.innerHeight - 140, 300 + d.nodes.length*6)));
+  // height tracks the browser window only (not node count), so filtering never shrinks it
+  const H = Math.round(Math.max(380, window.innerHeight - 140));
   const Z = S.zoom;
   if(S.gW && (S.gW !== W || S.gH !== H)){ Z.tx *= W/S.gW; Z.ty *= H/S.gH; }
   S.gW = W; S.gH = H;

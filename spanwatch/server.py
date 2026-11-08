@@ -17,9 +17,11 @@ from .hostnames import Directory, hosts_text
 from .session import Session
 from .whois import Whois
 from .reputation import Reputation, Feeds, AbuseIPDB, TIER_RANK
+from .pihole import PiHole
 
 REP_KEYWORDS = {"is:flagged": ("bad", "watch"), "is:bad": ("bad",), "is:watch": ("watch",),
                 "is:tor": ("tor",), "is:any": ("bad", "watch", "tor")}
+BLOCK_KEYWORD = "is:blocked"
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
@@ -33,7 +35,7 @@ class ApiError(Exception):
 class App:
     def __init__(self, store, iface, dns_ports=(53,), max_duration=3600,
                  keep=50, allow_addressed=False, whois=None, lan=(), hosts_file=None,
-                 reputation=None):
+                 reputation=None, pihole=None):
         self.store = store
         self.iface = iface
         self.dns_ports = tuple(dns_ports)
@@ -49,6 +51,7 @@ class App:
         self.lock = threading.Lock()
         self._next_id = store.next_id()
         self.hosts = Directory(store, hosts_file, live=self._live_hosts)
+        self.pihole = pihole or PiHole(None, enabled=False)
 
     # ------------------------------------------------------------ control
     def start(self, duration, note=""):
@@ -131,8 +134,17 @@ class App:
         live = self._live(sid)
         rows = live.dns_rows() if live else self.store.dns(sid)
         hn = self.hosts.lookup()
-        return [dict(d, client_host=hn.get(d["client"], ""), resolver_host=hn.get(d["resolver"], ""))
+        bf = self.pihole.block_for
+        return [dict(d, client_host=hn.get(d["client"], ""), resolver_host=hn.get(d["resolver"], ""),
+                     blocked=bf(d["client"], d["qname"], d["ts"]))
                 for d in rows]
+
+    def host_rows(self, q=""):
+        rows = self.hosts.rows(q)
+        v = self.pihole.vendors
+        if v:
+            rows = [dict(r, vendor=v.get(r["mac"], "")) for r in rows]
+        return rows
 
     def session_ips(self, flows, dns):
         ips = set()
@@ -149,6 +161,8 @@ class App:
 
     def rep_filter(self, rows, q, fields):
         """'is:flagged' style keywords filter on reputation instead of text."""
+        if q.strip().lower() == BLOCK_KEYWORD:
+            return [r for r in rows if r.get("blocked")], ""
         tiers = REP_KEYWORDS.get(q.strip().lower())
         if tiers is None:
             return rows, q
@@ -179,6 +193,7 @@ class App:
             "whois": self.whois.enabled, "lan": self.lan(),
             "reputation": {"feeds": self.rep.feeds.status(), "feeds_enabled": self.rep.feeds.enabled,
                            "abuseipdb": self.rep.abuse.enabled},
+            "pihole": self.pihole.status(),
             "host": os.uname().nodename, "now": time.time(),
         }
 
@@ -214,7 +229,8 @@ def filter_dns(rows, q="", limit=1000):
     if q:
         rows = [d for d in rows if _match(q, d["client"], d["resolver"], d["qname"],
                                           d["qtype"], d["rcode"], " ".join(d["answers"]),
-                                          d.get("client_host"), d.get("resolver_host"))]
+                                          d.get("client_host"), d.get("resolver_host"),
+                                          d.get("blocked"))]
     rows = rows[::-1]  # newest first
     return len(rows), rows[:limit]
 
@@ -223,6 +239,8 @@ def dns_line(d):
     t = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(d["ts"]))
     ans = ", ".join(d["answers"]) if d["answers"] else "-"
     extra = d["rcode"] + (" %.0fms" % d["ms"] if d.get("ms") is not None else "")
+    if d.get("blocked"):
+        extra += " pihole:" + d["blocked"]
     return "%s  %s -> %s  %s %s = %s  (%s)" % (
         t, d["client"], d["resolver"], d["qtype"], d["qname"], ans, extra)
 
@@ -355,7 +373,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/status":
             return self._send(200, app.status())
         if path in ("/api/hosts", "/api/hosts.txt", "/api/hosts.csv"):
-            rows = app.hosts.rows(qs.get("q", ""))
+            rows = app.host_rows(qs.get("q", ""))
             if path == "/api/hosts":
                 return self._send(200, {"total": len(rows), "rows": rows,
                                         "hosts_file": app.hosts.hosts_file or ""})
@@ -368,10 +386,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, hosts_text(rows, mc).encode(), "text/plain; charset=utf-8", disp)
             buf = io.StringIO()
             w = csv.writer(buf)
-            cols = ["ip", "name", "conf", "sources", "mac", "alts", "first", "last", "hits"]
+            cols = ["ip", "name", "conf", "sources", "mac", "vendor", "alts", "first", "last", "hits"]
             w.writerow(cols)
             for r in rows:
-                w.writerow([" ".join(r[c]) if c in ("sources", "alts") else r[c] for c in cols])
+                w.writerow([" ".join(r[c]) if c in ("sources", "alts") else r.get(c, "") for c in cols])
             return self._send(200, buf.getvalue().encode(), "text/csv; charset=utf-8", disp)
         if path == "/api/sessions":
             sessions = app.store.sessions()

@@ -19,6 +19,7 @@ from .session import Session
 from .store import Store
 from .whois import Whois
 from .reputation import Reputation, Feeds, AbuseIPDB, load_key
+from .pihole import PiHole, load_password
 
 
 def _data_dir(p):
@@ -58,6 +59,12 @@ def main(argv=None):
                     help="disable daily threat-feed downloads (reputation flags)")
     sv.add_argument("--abuseipdb-key-file", default="/etc/spanwatch/abuseipdb.key",
                     help="AbuseIPDB API key file (systemd passes it as a credential)")
+    sv.add_argument("--pihole-url", default="",
+                    help="Pi-hole v6 base URL, e.g. http://172.30.250.2 (enables lease/device/"
+                         "blocked-query import; off when empty)")
+    sv.add_argument("--pihole-key-file", default="/etc/spanwatch/pihole.key",
+                    help="Pi-hole app password file (systemd passes it as a credential)")
+    sv.add_argument("--pihole-interval", type=int, default=300, help="seconds between Pi-hole polls")
     sv.add_argument("--no-whois", action="store_true",
                     help="disable on-demand RDAP/Cymru lookups (no outbound traffic)")
 
@@ -105,10 +112,16 @@ def main(argv=None):
     host, _, port = a.listen.rpartition(":")
     feeds = Feeds(_data_dir(a.data), enabled=not a.no_feeds)
     reputation = Reputation(feeds, AbuseIPDB(store, load_key(a.abuseipdb_key_file)))
+    pw = load_password(a.pihole_key_file) if a.pihole_url else None
+    if a.pihole_url and not pw:
+        print("pihole: --pihole-url set but no password in credential/%s; disabled" % a.pihole_key_file,
+              flush=True)
+    pihole = PiHole(store, a.pihole_url, pw, a.pihole_interval)
     app = App(store, a.iface, _ports(a.dns_ports), a.max_duration, a.keep, a.allow_addressed,
               whois=Whois(store, enabled=not a.no_whois), lan=a.lan,
-              hosts_file=a.hosts_file or None, reputation=reputation)
+              hosts_file=a.hosts_file or None, reputation=reputation, pihole=pihole)
     feeds.start()
+    pihole.start()
     httpd = serve(app, host.strip("[]"), int(port), a.allow_host)
 
     def bye(*_):

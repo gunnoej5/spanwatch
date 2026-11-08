@@ -130,6 +130,8 @@ td.r,th.r{text-align:right}
 .rc-NOERROR{color:var(--sig)}.rc-NXDOMAIN{color:var(--amber)}.rc-SERVFAIL,.rc-REFUSED,.rc-NO-RESPONSE{color:var(--red)}
 .ans{white-space:normal;color:var(--dim);max-width:520px;word-break:break-all}
 .qn{color:var(--text)}
+.blk{display:inline-block;margin-left:6px;padding:0 5px;border:1px solid var(--red-d);border-radius:3px;color:var(--red);font-size:10px;letter-spacing:.04em;cursor:pointer}
+tr.blocked .qn{color:var(--red);text-decoration:line-through;text-decoration-color:var(--red-d)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
 .sect{background:var(--panel);border:1px solid var(--line2)}
 .sect h3{border-bottom:1px solid var(--line)}
@@ -441,6 +443,12 @@ function renderStatus(){
       const tip = rp.feeds.map(x=>x.name+": "+(x.count?num(x.count)+" entries, "+dfmt(x.updated):"not loaded")+(x.error?" ("+x.error+")":"")).join("\n");
       c.push('<span class="chip '+(ok===rp.feeds.length?"ok":ok?"warn":"bad")+'" title="'+esc(tip)+'">feeds '+ok+'/'+rp.feeds.length+(rp.abuseipdb?" · abuseipdb":"")+'</span>');
     }
+    const ph = st.pihole;
+    if(ph && ph.enabled){
+      const tip = ph.ok ? "last poll "+dfmt(ph.last_poll)+": "+num(ph.leases)+" leases, "+num(ph.devices)+" devices, "+num(ph.queries)+" queries; "+num(ph.blocked_pairs)+" blocked client/domain pairs tracked"
+                        : (ph.error || "waiting for first poll");
+      c.push('<span class="chip '+(ph.ok?"ok":ph.ok===false?"bad":"warn")+'" title="'+esc(tip)+'">pihole'+(ph.ok?" "+num(ph.leases)+" leases":ph.ok===false?" error":" …")+'</span>');
+    }
   }
   $("#chips").innerHTML = c.join("");
   const go = $("#go");
@@ -494,6 +502,7 @@ function renderMeter(s, fc){
 // ---------------------------------------------------------------- views
 function setTab(t){ S.tab=t; history.replaceState(null,"","#"+t); document.querySelectorAll("#tabs button[data-t]").forEach(b=>b.classList.toggle("sel", b.dataset.t===t)); }
 $("#meter").onclick = e => { const c = e.target.closest("[data-qset]"); if(c) setQ(c.dataset.qset, true); };
+document.addEventListener("click", e => { const c = e.target.closest(".blk[data-qset]"); if(c){ e.stopPropagation(); setQ(c.dataset.qset, true); } }, true);
 $("#tabs").onclick = e => { const t = e.target.dataset?.t; if(t){ setTab(t); loadView(true) } };
 if(["flows","dns","mix","hosts"].includes(location.hash.slice(1))) setTab(location.hash.slice(1));
 // ---------------------------------------------------------------- filter box
@@ -615,8 +624,8 @@ function flowsTable(d){
 function dnsTable(d){
   if(!d.rows.length) return '<div class="empty">no DNS '+(S.q?"matches":"seen yet")+' — only plaintext DNS on port(s) '+esc((S.status?.dns_ports||[53]).join(","))+' is visible; DoH/DoT is opaque</div>';
   return '<table><thead><tr><th>time</th><th>requestor</th><th>type</th><th>query</th><th>answer</th><th>provider</th><th>rcode</th><th class="r">ms</th></tr></thead><tbody>'
-    + d.rows.map(x => '<tr><td class="dir">'+tfmt(x.ts)+'</td><td>'+ipCell(x.client,"",x.client_host)+'</td><td class="svc">'+esc(x.qtype)+'</td>'
-      + '<td class="qn">'+esc(x.qname)+'</td><td class="ans">'+(x.answers.length?esc(x.answers.join(", ")):'<span class="dir">—</span>')+'</td>'
+    + d.rows.map(x => '<tr'+(x.blocked?' class="blocked"':'')+'><td class="dir">'+tfmt(x.ts)+'</td><td>'+ipCell(x.client,"",x.client_host)+'</td><td class="svc">'+esc(x.qtype)+'</td>'
+      + '<td class="qn">'+esc(x.qname)+(x.blocked?'<span class="blk" data-qset="is:blocked" title="Pi-hole blocked this lookup ('+esc(x.blocked)+'). Click to filter: is:blocked">blocked</span>':'')+'</td><td class="ans">'+(x.answers.length?esc(x.answers.join(", ")):'<span class="dir">—</span>')+'</td>'
       + '<td>'+ipCell(x.resolver,"",x.resolver_host)+'</td><td class="rc-'+esc(x.rcode)+'">'+esc(x.rcode)+'</td><td class="r dir">'+(x.ms==null?"":x.ms)+'</td></tr>').join("")
     + '</tbody></table>';
 }
@@ -818,9 +827,10 @@ function drawGraph(){
 }
 
 const HCONF = ["","weak","likely","confirmed"];
-const HCONFN = ["","one weak source (LLMNR)","one strong source","2+ sources agree, or override file"];
+const HCONFN = ["","one weak source (LLMNR)","one strong source","2+ sources agree, Pi-hole DHCP lease, or override file"];
 const HSRC = {dhcp:"DHCP option 12/81", mdns:"mDNS *.local record", netbios:"NetBIOS name registration",
-  llmnr:"LLMNR response", "dns-ptr":"reverse DNS answered by your resolver", file:"override file"};
+  llmnr:"LLMNR response", "dns-ptr":"reverse DNS answered by your resolver", file:"override file",
+  "pihole-dhcp":"Pi-hole DHCP lease (authoritative)", pihole:"Pi-hole network table"};
 function hostsTable(d){
   const f = d.hosts_file ? ' Overrides: <b>'+esc(d.hosts_file)+'</b> (hosts-file format, wins over everything).' : "";
   if(!d.rows.length) return '<div class="empty">no local hostnames '+(S.q?"match":"learned yet")+'. Run a capture: names come from DHCP, mDNS, NetBIOS and LLMNR chatter, so busy minutes beat quiet ones.'+f+'</div>';
@@ -830,7 +840,7 @@ function hostsTable(d){
       + '<td><b style="font-weight:600">'+esc(h.name)+'</b></td>'
       + '<td><span class="g conf'+h.conf+'" style="--c:var(--sig)" title="'+esc(HCONFN[h.conf])+'">'+HCONF[h.conf]+'</span></td>'
       + '<td class="hsrc">'+h.sources.map(s=>'<span title="'+esc(HSRC[s]||s)+'">'+esc(s)+'</span>').join(" · ")+'</td>'
-      + '<td class="mac">'+esc(h.mac)+'</td>'
+      + '<td class="mac"'+(h.vendor?' title="'+esc(h.vendor)+'"':'')+'>'+esc(h.mac)+(h.vendor?'<div class="hsrc">'+esc(h.vendor)+'</div>':'')+'</td>'
       + '<td class="hsrc">'+esc(h.alts.join(", "))+'</td>'
       + '<td class="dir">'+dfmt(h.last)+'</td></tr>').join("")
     + '</tbody></table>';

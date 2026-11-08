@@ -16,6 +16,8 @@ DynamicUser=yes
 StateDirectory=spanwatch
 # AbuseIPDB key: root-only file, handed to the DynamicUser as a credential
 LoadCredential=abuseipdb:/etc/spanwatch/abuseipdb.key
+# Pi-hole app password (admin-equivalent: v6 has no read-only scope), same handling
+LoadCredential=pihole:/etc/spanwatch/pihole.key
 AmbientCapabilities=CAP_NET_RAW
 CapabilityBoundingSet=CAP_NET_RAW
 NoNewPrivileges=yes

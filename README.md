@@ -155,6 +155,40 @@ Coverage depends on what the mirror carries. DHCP happens at join/renew time
 these (some IoT) stay nameless. Pin those in the override file. DHCPv6 is not
 parsed.
 
+## Pi-hole (optional, outbound)
+
+If Pi-hole v6 runs your DHCP/DNS, spanwatch can read it instead of guessing:
+
+- **DHCP leases** become a `pihole-dhcp` hostname source. The DHCP server's
+  own lease table is authoritative, so these names are `confirmed` (conf 3).
+- **FTL's network table** becomes a `pihole` source (MAC → IPs with names),
+  and the Hosts tab shows the MAC vendor under each address.
+- **Blocked queries**: the DNS log marks lookups Pi-hole blocked (status such
+  as `GRAVITY` or `REGEX`), struck through with a red `blocked` badge.
+  Filter with `is:blocked`. Matching is by client IP + domain within the
+  time window Pi-hole saw it blocked. Pairs unseen for 30 days are dropped.
+
+Every `--pihole-interval` seconds (default 300) it logs in, makes GET
+requests only, and logs out, so no API session slot stays occupied. The
+first poll backfills a day of queries.
+
+Pi-hole v6 has **no read-only API scope**: an app password is a full admin
+credential. Keep it root-only. systemd hands it to the DynamicUser with
+`LoadCredential`, the same way as the AbuseIPDB key. It is never logged or
+returned by the dashboard.
+
+```bash
+# Pi-hole web UI: Settings → Web interface / API → Expert → Configure app password
+sudo sh -c 'umask 077; cat > /etc/spanwatch/pihole.key'      # paste, Enter, Ctrl-D
+# add to SPANWATCH_ARGS in /etc/spanwatch/spanwatch.env:
+#   --pihole-url http://172.30.250.2
+sudo deploy/install.sh update
+```
+
+The dashboard header shows a `pihole` chip (lease count, or the error on
+hover). With a macvlan Pi-hole, point `--pihole-url` at an address the host
+can reach (a bridge network). The host can't reach its own macvlan children.
+
 ## Receive-only by design
 
 The sniff port must never take part in the network. That is enforced in layers:
@@ -186,7 +220,7 @@ The sniff port must never take part in the network. That is enforced in layers:
 
 ```sh
 git clone https://github.com/gunnoej5/spanwatch && cd spanwatch
-python3 -m unittest            # 13 tests, no root needed
+python3 -m unittest            # no root needed
 sudo deploy/install.sh install # BEFORE plugging the adapter in
 # plug the 2.5G adapter into this host and the SPAN port
 ip -br link                    # find it, e.g. enx00e04c68xxxx

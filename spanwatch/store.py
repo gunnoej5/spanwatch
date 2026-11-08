@@ -178,6 +178,10 @@ class Store:
             self.db.execute("INSERT OR REPLACE INTO kv VALUES (?,?,?,?)",
                             (ns, k, d.get("ts", 0), json.dumps(d)))
 
+    def kv_prune(self, ns, before):
+        with self.lock, self.db:
+            return self.db.execute("DELETE FROM kv WHERE ns=? AND ts < ?", (ns, before)).rowcount
+
     def whois_put(self, ip, d):
         with self.lock, self.db:
             self.db.execute("INSERT OR REPLACE INTO whois VALUES (?,?,?)",

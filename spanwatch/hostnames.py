@@ -12,6 +12,10 @@ the sniffer can learn names without credentials or queries:
   arp      sender MAC/IP pairs (binding only, no names)
   file     an optional /etc/hosts-format override file (always wins)
 
+With --pihole-url set, Pi-hole's API adds two non-passive sources (pihole.py):
+  pihole-dhcp  the DHCP server's own active leases (authoritative: conf 3)
+  pihole       FTL's network table (MAC -> IPs with names it resolved)
+
 Observations are keyed by (mac, ip, name, source). Names attach to IPs either
 directly or through MAC->IP bindings (DHCP ACK, ARP, self-announcements), so a
 DHCP DISCOVER that only carries a MAC still ends up on the right address.
@@ -29,7 +33,7 @@ from socket import inet_ntop, AF_INET, AF_INET6
 from .parse import _name
 
 HOST_PORTS = frozenset((67, 68, 137, 5353, 5355))
-WEIGHT = {"file": 3, "dhcp": 2, "mdns": 2, "netbios": 2, "dns-ptr": 2, "llmnr": 1}
+WEIGHT = {"file": 3, "pihole-dhcp": 3, "pihole": 2, "dhcp": 2, "mdns": 2, "netbios": 2, "dns-ptr": 2, "llmnr": 1}
 STALE = 30 * 86400          # ignore observations older than this
 MAX_OBS = 50_000
 MAX_BIND = 50_000
@@ -408,7 +412,7 @@ def resolve(obs, binds, now=None, stale=STALE):
 
     def score(item):
         c = item[1]
-        return ("file" in c["src"], sum(WEIGHT.get(s, 1) for s in c["src"]), c["last"])
+        return ("file" in c["src"], "pihole-dhcp" in c["src"], sum(WEIGHT.get(s, 1) for s in c["src"]), c["last"])
 
     out = {}
     for t, names in cand.items():
@@ -416,7 +420,7 @@ def resolve(obs, binds, now=None, stale=STALE):
         _key, c = ranked[0]
         forms = c["forms"].most_common()
         disp = next((f for f, _ in forms if not f.isupper()), forms[0][0])
-        if "file" in c["src"] or len(c["src"]) >= 2:
+        if "file" in c["src"] or "pihole-dhcp" in c["src"] or len(c["src"]) >= 2:
             conf = 3
         else:
             conf = 2 if max(WEIGHT.get(s, 1) for s in c["src"]) >= 2 else 1

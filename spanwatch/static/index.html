@@ -148,7 +148,12 @@ tr.blocked .qn{color:var(--red);text-decoration:line-through;text-decoration-col
 .gsect h3{display:flex;align-items:center;gap:14px}
 .gsect h3 .sub{letter-spacing:0;text-transform:none;color:var(--dim);font-weight:400}
 .gctl{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--line)}
-.gctl .lg{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--dim)}
+.gctl .lg{display:flex;gap:10px;flex-wrap:wrap;font-size:13px;color:var(--dim)}
+.gctl .lg [data-gcat]{cursor:pointer;padding:1px 4px;border-radius:2px;border:1px solid transparent}
+.gctl .lg [data-gcat]:hover{border-color:var(--line2);color:var(--text)}
+.gctl .lg [data-gcat].off{opacity:.35;text-decoration:line-through}
+.gctl .lg .gall{cursor:pointer;color:var(--faint);padding:1px 4px}
+.gctl .lg .gall:hover{color:var(--text)}
 .gctl .lg i{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:4px}
 .gctl .lg b{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:4px}
 #graph{position:relative;overflow:hidden;background:radial-gradient(ellipse at center,rgba(92,242,166,.03),transparent 70%)}
@@ -156,8 +161,8 @@ tr.blocked .qn{color:var(--red);text-decoration:line-through;text-decoration-col
 .gsvg line{stroke-linecap:round;opacity:.55;transition:opacity .15s}
 .gsvg .nd{cursor:grab;transition:opacity .15s}
 .gsvg .nd circle{stroke:var(--ink);stroke-width:1.5}
-.gsvg text{fill:var(--text);font:12px var(--mono);paint-order:stroke;stroke:var(--ink);stroke-width:3px}
-.gsvg text.sub{fill:var(--faint);font-size:11px}
+.gsvg text{fill:var(--text);font:13px var(--mono);paint-order:stroke;stroke:var(--ink);stroke-width:3px}
+.gsvg text.sub{fill:var(--faint);font-size:12px}
 .gsvg text.hide{display:none}
 .gsvg.focus line{opacity:.06}.gsvg.focus line.hi{opacity:1}
 .gsvg.focus .nd{opacity:.2}.gsvg.focus .nd.hi{opacity:1}
@@ -243,9 +248,12 @@ tr.blocked .qn{color:var(--red);text-decoration:line-through;text-decoration-col
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
+// Protocol categories hidden in the graph (legend toggles), remembered per browser.
+function ghideLoad(){ try{ const v = JSON.parse(localStorage.getItem("spanwatch.graph.hide") || "[]"); return Array.isArray(v) ? v : []; }catch(e){ return []; } }
+function ghideSave(){ try{ localStorage.setItem("spanwatch.graph.hide", JSON.stringify([...S.ghide])); }catch(e){} }
 const DUR = [[30,"30s"],[120,"2m"],[300,"5m"],[900,"15m"],[3600,"60m"]];
 const S = {dur: 120, sel: null, tab: "flows", sort: "bytes", q: "", status: null, sessions: [], timer: null,
-  gm: "packets", gs: "log", pos: {}, gdata: null, drag: null, posFor: null,
+  gm: "packets", gs: "log", pos: {}, gdata: null, drag: null, posFor: null, ghide: new Set(ghideLoad()),
   zoom: {k:1, tx:0, ty:0}, gplace: null, gW: 800, gH: 500, wip: null};
 const CAT = {wireguard:"vpn",openvpn:"vpn",ipsec:"vpn","pptp-vpn":"vpn","l2tp-vpn":"vpn",gre:"vpn",
   ssh:"remote",rdp:"remote",vnc:"remote",tls:"web",quic:"web","dns-over-tls":"web",
@@ -601,6 +609,14 @@ $("#view").onclick = e => {
   if(z){ if(z.dataset.gz === "reset"){ Object.assign(S.zoom, {k:1,tx:0,ty:0}); S.gplace && S.gplace(); } else zoomBy(z.dataset.gz === "in" ? 1.4 : 1/1.4); return; }
   const ip = e.target.dataset?.ip; if(ip){ setQ(ip, true); return; }
   const s = e.target.closest("th[data-sort]"); if(s){ S.sort = s.dataset.sort; loadView(true); return; }
+  const gc = e.target.closest("[data-gcat],[data-gcat-all]");
+  if(gc){ const c = gc.dataset.gcat;
+    if(!c) S.ghide.clear();
+    else if(e.shiftKey){ S.ghide = new Set(Object.keys(CATN).filter(k => k !== c)); }
+    else if(S.ghide.has(c)) S.ghide.delete(c); else S.ghide.add(c);
+    ghideSave();
+    document.querySelectorAll("[data-gcat]").forEach(x => x.classList.toggle("off", S.ghide.has(x.dataset.gcat)));
+    drawGraph(); return; }
   const b = e.target.closest("[data-gm],[data-gs],[data-relayout]");
   if(b){ if(b.dataset.gm) S.gm=b.dataset.gm; if(b.dataset.gs) S.gs=b.dataset.gs; if(b.dataset.relayout!=null){ S.pos={}; Object.assign(S.zoom, {k:1,tx:0,ty:0}); }
     document.querySelectorAll("[data-gm]").forEach(x=>x.classList.toggle("sel", x.dataset.gm===S.gm));
@@ -657,10 +673,11 @@ function mixView(d){
 // ---------------------------------------------------------------- graph
 function graphShell(){
   const seg = (attr, cur, opts) => '<div class="seg">'+opts.map(([v,l])=>'<button data-'+attr+'="'+v+'" class="'+(v===cur?"sel":"")+'">'+l+'</button>').join("")+'</div>';
-  const cats = Object.keys(CATN).map(c=>'<span><i style="background:'+CATC[c]+'"></i>'+CATN[c]+'</span>').join("");
+  const cats = Object.keys(CATN).map(c=>'<span data-gcat="'+c+'" class="'+(S.ghide.has(c)?"off":"")+'" title="click: show/hide '+CATN[c]+' lines · shift-click: show only this"><i style="background:'+CATC[c]+'"></i>'+CATN[c]+'</span>').join("")
+    + '<span class="gall" data-gcat-all="1" title="show all protocols">all</span>';
   const kinds = [["lan","LAN / localhost"],["vpn","internal / VPN"],["pub","public"]].map(([k,l])=>'<span><b style="background:'+ACLR[k]+'"></b>'+l+'</span>').join("")
     + '<span><b style="background:var(--red);border-radius:2px;box-shadow:0 0 0 2px #000 inset"></b>flagged</span><span><b style="border:1px solid var(--red);background:none;border-radius:2px"></b>watch</span><span><b style="border:1px dashed var(--violet);background:none;border-radius:2px"></b>tor</span>';
-  return '<div class="sect gsect"><h3>IP relationships <span class="sub">line width = occurrences seen, 1px (least) → 6px (most) · drag node = move it · shift-drag = move with its leaf peers · alt-drag = move with all peers · scroll to zoom · drag background to pan · double-click to reset · click node = filter · right-click node = whois</span></h3>'
+  return '<div class="sect gsect"><h3>IP relationships <span class="sub">line width = occurrences seen, 1px (least) → 10px (most) · click a protocol in the legend to hide/show its lines · drag node = move it · shift-drag = move with its leaf peers · alt-drag = move with all peers · scroll to zoom · drag background to pan · double-click to reset · click node = filter · right-click node = whois</span></h3>'
     + '<div class="gctl">'+seg("gm",S.gm,[["packets","packets"],["conns","conversations"],["bytes","bytes"]])
     + seg("gs",S.gs,[["log","log"],["linear","linear"]])
     + '<button class="btn ghost" data-relayout="1">re-layout</button>'
@@ -689,7 +706,7 @@ function layout(nodes, edges, idx, W, H){
         const d=Math.sqrt(d2), f=k*k/d;
         a.dx+=dx/d*f; a.dy+=dy/d*f; b.dx-=dx/d*f; b.dy-=dy/d*f; } }
     for(const e of edges){ const a=idx[e.a], b=idx[e.b];
-      const dx=a.x-b.x, dy=a.y-b.y, d=Math.sqrt(dx*dx+dy*dy)||0.1, f=d*d/k*(0.55+0.09*e.w);
+      const dx=a.x-b.x, dy=a.y-b.y, d=Math.sqrt(dx*dx+dy*dy)||0.1, f=d*d/k*(0.55+0.054*e.w);
       a.dx-=dx/d*f; a.dy-=dy/d*f; b.dx+=dx/d*f; b.dy+=dy/d*f; }
     for(const n of nodes){
       n.dx += (W/2-n.x)*0.22; n.dy += (H/2-n.y)*0.38;
@@ -729,8 +746,12 @@ function drawGraph(){
   const val = e => S.gm==="bytes" ? e.bytes : S.gm==="conns" ? e.flows : e.packets;
   const sc = S.gs==="log" ? (x => Math.log(Math.max(x,1))) : (x => x);
   const vs = d.edges.map(val), lo = sc(Math.min(...vs)), hi = sc(Math.max(...vs));
-  const edges = d.edges.map(e => ({...e, w: hi>lo ? 1 + 5*(sc(val(e))-lo)/(hi-lo) : 1}));
-  const nodes = d.nodes.map(n => ({...n})), idx = {}, adj = {};
+  // widths are scaled over every edge so hiding a protocol doesn't rescale the rest
+  const edges = d.edges.map(e => ({...e, w: hi>lo ? 1 + 9*(sc(val(e))-lo)/(hi-lo) : 1}))
+    .filter(e => !S.ghide.has(catOf(e.guess)));
+  if(!edges.length){ box.innerHTML = '<div class="empty">all IP pairs hidden by the protocol legend: click a protocol (or "all") to show lines</div>'; return; }
+  const live = new Set(edges.flatMap(e => [e.a, e.b]));
+  const nodes = d.nodes.filter(n => live.has(n.id)).map(n => ({...n})), idx = {}, adj = {};
   nodes.forEach(n => { idx[n.id] = n; adj[n.id] = []; });
   edges.forEach((e,i) => { adj[e.a].push(i); adj[e.b].push(i); });
   const maxB = Math.max(...nodes.map(n=>n.bytes), 1);

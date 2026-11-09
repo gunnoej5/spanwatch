@@ -20,6 +20,7 @@ from .store import Store
 from .whois import Whois
 from .reputation import Reputation, Feeds, AbuseIPDB, load_key
 from .pihole import PiHole, load_password
+from .asn import AsnDB, Groups
 
 
 def _data_dir(p):
@@ -65,6 +66,10 @@ def main(argv=None):
     sv.add_argument("--pihole-key-file", default="/etc/spanwatch/pihole.key",
                     help="Pi-hole app password file (systemd passes it as a credential)")
     sv.add_argument("--pihole-interval", type=int, default=300, help="seconds between Pi-hole polls")
+    sv.add_argument("--no-asn", action="store_true",
+                    help="disable the daily iptoasn.com download (graph org wedges, owner labels)")
+    sv.add_argument("--orgs-file", default="/etc/spanwatch/orgs.json",
+                    help="JSON list of org groups for the graph wedges (optional)")
     sv.add_argument("--no-whois", action="store_true",
                     help="disable on-demand RDAP/Cymru lookups (no outbound traffic)")
 
@@ -117,10 +122,12 @@ def main(argv=None):
         print("pihole: --pihole-url set but no password in credential/%s; disabled" % a.pihole_key_file,
               flush=True)
     pihole = PiHole(store, a.pihole_url, pw, a.pihole_interval)
+    asn = AsnDB(_data_dir(a.data), enabled=not a.no_asn, groups=Groups.load(a.orgs_file))
     app = App(store, a.iface, _ports(a.dns_ports), a.max_duration, a.keep, a.allow_addressed,
               whois=Whois(store, enabled=not a.no_whois), lan=a.lan,
-              hosts_file=a.hosts_file or None, reputation=reputation, pihole=pihole)
+              hosts_file=a.hosts_file or None, reputation=reputation, pihole=pihole, asn=asn)
     feeds.start()
+    asn.start()
     pihole.start()
     httpd = serve(app, host.strip("[]"), int(port), a.allow_host)
 

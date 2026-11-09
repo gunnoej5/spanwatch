@@ -155,6 +155,38 @@ Coverage depends on what the mirror carries. DHCP happens at join/renew time
 these (some IoT) stay nameless. Pin those in the override file. DHCPv6 is not
 parsed.
 
+## Org wedges (graph)
+
+With **org wedges on** (button next to re-layout, on by default), clicking a
+host in the IP graph lays out that host's direct peers around it in slices by
+network owner: Amazon 12–3 o'clock, Google 3–6, Microsoft 6–9, everyone else
+9–12. LAN peers go in the "others" slice. Click the host again to return to
+the normal layout. Each slice shows a count, and public nodes get a ring in
+their group colour.
+
+Ownership comes from a local copy of the free [iptoasn.com](https://iptoasn.com)
+table (~11 MB, downloaded daily to `<data>/feeds/`, ~80 MB RAM once loaded),
+so no addresses leave the box. Every public node also gets its network owner
+as a label and tooltip line (`network: AS16509 Amazon.com, Inc. (US)`), even
+outside wedge mode. It reports **whose network** an address is on, not whose
+service it is: SaaS on AWS or Google Cloud lands in Amazon's or Google's slice.
+
+To change the groups, write `/etc/spanwatch/orgs.json` (or pass
+`--orgs-file`). Slices are equal and run clockwise from 12 o'clock in list
+order. `match` is a case-insensitive regex tried against the AS description
+when the ASN isn't listed. A catch-all `other` group is added when missing:
+
+```json
+[
+  {"id": "amazon", "name": "Amazon", "asns": [16509, 14618], "match": "\\bamazon\\b", "color": "#ff9f43"},
+  {"id": "google", "name": "Google", "asns": [15169, 396982], "match": "\\bgoogle\\b", "color": "#6cb6ff"},
+  {"id": "apple", "name": "Apple", "asns": [714, 6185], "color": "#c9d4d8"},
+  {"id": "other", "name": "Others"}
+]
+```
+
+`--no-asn` turns off the download.
+
 ## Pi-hole (optional, outbound)
 
 If Pi-hole v6 runs your DHCP/DNS, spanwatch can read it instead of guessing:

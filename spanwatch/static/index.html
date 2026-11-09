@@ -154,6 +154,10 @@ tr.blocked .qn{color:var(--red);text-decoration:line-through;text-decoration-col
 .gctl .lg [data-gcat].off{opacity:.35;text-decoration:line-through}
 .gctl .lg .gall{cursor:pointer;color:var(--faint);padding:1px 4px}
 .gctl .lg .gall:hover{color:var(--text)}
+.gsvg path.wedge{fill-opacity:.07;stroke-opacity:.4;stroke-width:1;vector-effect:non-scaling-stroke;pointer-events:none}
+.gsvg text.wlab{font-size:12px;font-weight:600;letter-spacing:.12em;stroke-width:4px;pointer-events:none}
+.gsvg text.cap{fill:var(--dim);font-size:12px;pointer-events:none}
+.btn.ghost.on{color:var(--sig);border-color:var(--sig-d)}
 .gctl .lg i{display:inline-block;width:14px;height:3px;vertical-align:middle;margin-right:4px}
 .gctl .lg b{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;margin-right:4px}
 #graph{position:relative;overflow:hidden;background:radial-gradient(ellipse at center,rgba(92,242,166,.03),transparent 70%)}
@@ -254,6 +258,7 @@ function ghideSave(){ try{ localStorage.setItem("spanwatch.graph.hide", JSON.str
 const DUR = [[30,"30s"],[120,"2m"],[300,"5m"],[900,"15m"],[3600,"60m"]];
 const S = {dur: 120, sel: null, tab: "flows", sort: "bytes", q: "", status: null, sessions: [], timer: null,
   gm: "packets", gs: "log", pos: {}, gdata: null, drag: null, posFor: null, ghide: new Set(ghideLoad()),
+  wpos: {}, gorg: (()=>{ try{ return localStorage.getItem("spanwatch.graph.org") !== "0"; }catch(e){ return true; } })(),
   zoom: {k:1, tx:0, ty:0}, gplace: null, gW: 800, gH: 500, wip: null};
 const CAT = {wireguard:"vpn",openvpn:"vpn",ipsec:"vpn","pptp-vpn":"vpn","l2tp-vpn":"vpn",gre:"vpn",
   ssh:"remote",rdp:"remote",vnc:"remote",tls:"web",quic:"web","dns-over-tls":"web",
@@ -609,6 +614,9 @@ $("#view").onclick = e => {
   if(z){ if(z.dataset.gz === "reset"){ Object.assign(S.zoom, {k:1,tx:0,ty:0}); S.gplace && S.gplace(); } else zoomBy(z.dataset.gz === "in" ? 1.4 : 1/1.4); return; }
   const ip = e.target.dataset?.ip; if(ip){ setQ(ip, true); return; }
   const s = e.target.closest("th[data-sort]"); if(s){ S.sort = s.dataset.sort; loadView(true); return; }
+  const go = e.target.closest("[data-gorg]");
+  if(go){ S.gorg = !S.gorg; try{ localStorage.setItem("spanwatch.graph.org", S.gorg ? "1" : "0"); }catch(_){}
+    go.classList.toggle("on", S.gorg); go.textContent = "org wedges "+(S.gorg?"on":"off"); drawGraph(); return; }
   const gc = e.target.closest("[data-gcat],[data-gcat-all]");
   if(gc){ const c = gc.dataset.gcat;
     if(!c) S.ghide.clear();
@@ -618,7 +626,7 @@ $("#view").onclick = e => {
     document.querySelectorAll("[data-gcat]").forEach(x => x.classList.toggle("off", S.ghide.has(x.dataset.gcat)));
     drawGraph(); return; }
   const b = e.target.closest("[data-gm],[data-gs],[data-relayout]");
-  if(b){ if(b.dataset.gm) S.gm=b.dataset.gm; if(b.dataset.gs) S.gs=b.dataset.gs; if(b.dataset.relayout!=null){ S.pos={}; Object.assign(S.zoom, {k:1,tx:0,ty:0}); }
+  if(b){ if(b.dataset.gm) S.gm=b.dataset.gm; if(b.dataset.gs) S.gs=b.dataset.gs; if(b.dataset.relayout!=null){ S.pos={}; S.wpos={}; Object.assign(S.zoom, {k:1,tx:0,ty:0}); }
     document.querySelectorAll("[data-gm]").forEach(x=>x.classList.toggle("sel", x.dataset.gm===S.gm));
     document.querySelectorAll("[data-gs]").forEach(x=>x.classList.toggle("sel", x.dataset.gs===S.gs));
     drawGraph(); }
@@ -677,10 +685,11 @@ function graphShell(){
     + '<span class="gall" data-gcat-all="1" title="show all protocols">all</span>';
   const kinds = [["lan","LAN / localhost"],["vpn","internal / VPN"],["pub","public"]].map(([k,l])=>'<span><b style="background:'+ACLR[k]+'"></b>'+l+'</span>').join("")
     + '<span><b style="background:var(--red);border-radius:2px;box-shadow:0 0 0 2px #000 inset"></b>flagged</span><span><b style="border:1px solid var(--red);background:none;border-radius:2px"></b>watch</span><span><b style="border:1px dashed var(--violet);background:none;border-radius:2px"></b>tor</span>';
-  return '<div class="sect gsect"><h3>IP relationships <span class="sub">line width = occurrences seen, 1px (least) → 10px (most) · click a protocol in the legend to hide/show its lines · drag node = move it · shift-drag = move with its leaf peers · alt-drag = move with all peers · scroll to zoom · drag background to pan · double-click to reset · click node = filter · right-click node = whois</span></h3>'
+  return '<div class="sect gsect"><h3>IP relationships <span class="sub">line width = occurrences seen, 1px (least) → 10px (most) · click a protocol in the legend to hide/show its lines · with org wedges on, click a host to see its peers grouped by network owner · drag node = move it · shift-drag = move with its leaf peers · alt-drag = move with all peers · scroll to zoom · drag background to pan · double-click to reset · click node = filter · right-click node = whois</span></h3>'
     + '<div class="gctl">'+seg("gm",S.gm,[["packets","packets"],["conns","conversations"],["bytes","bytes"]])
     + seg("gs",S.gs,[["log","log"],["linear","linear"]])
     + '<button class="btn ghost" data-relayout="1">re-layout</button>'
+    + '<button class="btn ghost'+(S.gorg?" on":"")+'" data-gorg="1" title="When on, clicking a host lays its direct peers out in wedges by network owner (Amazon 12–3, Google 3–6, Microsoft 6–9, others 9–12). Click the host again to go back.">org wedges '+(S.gorg?"on":"off")+'</button>'
     + '<div class="lg">'+cats+'</div><div class="lg">'+kinds+'</div></div>'
     + '<div id="graph"></div></div>';
 }
@@ -718,6 +727,37 @@ function layout(nodes, edges, idx, W, H){
   for(const n of nodes) S.pos[n.id] = {x:n.x/W, y:n.y/H};
 }
 
+// Ego layout for org wedges: origin in the middle, each direct peer on rings inside its
+// owner's slice (equal slices, list order, clockwise from 12). Heaviest links sit nearest.
+// The ellipse leaves room on both sides for labels. Dragged positions (store) win.
+function wedgeLayout(nodes, edges, idx, origin, groups, W, H, store){
+  const L = 160, R = 160, T = 46;   // labels point outward on both sides
+  const cx = (L + W - R)/2, cy = H/2, rx = Math.max(110, (W - R - L)/2), ry = Math.max(110, H/2 - T);
+  const g = Math.max(groups.length, 1), span = 2*Math.PI/g;
+  const o = idx[origin]; o.x = cx; o.y = cy;
+  const gi = {}; groups.forEach((x,i) => gi[x.id] = i);
+  const other = gi.other ?? g-1;
+  const wt = {}; edges.forEach(e => { const p = e.a === origin ? e.b : e.a; wt[p] = (wt[p]||0) + e.w; });
+  const buckets = Array.from({length:g}, () => []);
+  nodes.forEach(n => { if(n.id !== origin) buckets[gi[n.grp] ?? other].push(n); });
+  // Peers fan out evenly across the slice; consecutive peers step outward through a few
+  // rings (zigzag) so neighbouring labels don't sit on the same radius.
+  const avgR = (rx+ry)/2, f0 = 0.4, f1 = 0.92, gap = 40, margin = 0.08;
+  const nR = Math.max(1, Math.floor((f1-f0)*avgR/gap) + 1);
+  const usable = Math.max(span - 2*margin, 0.05);
+  buckets.forEach((list, i) => {
+    list.sort((a,b) => (wt[b.id]||0) - (wt[a.id]||0) || b.bytes - a.bytes);
+    const m = list.length, used = Math.min(nR, Math.max(1, Math.ceil(m/3)));
+    const rs = used === 1 ? [0.66] : Array.from({length:used}, (_,j) => f0 + (f1-f0)*j/(used-1));
+    list.forEach((n, q) => {
+      const a = i*span + margin + usable*(q + 0.5)/m, f = rs[q % used];
+      n.x = cx + f*rx*Math.sin(a); n.y = cy - f*ry*Math.cos(a);
+      const p = store[n.id]; if(p){ n.x = p.x*W; n.y = p.y*H; }
+    });
+  });
+  return {rx, ry, span, counts: buckets.map(b => b.length)};
+}
+
 function zoomBy(f, px, py){
   const Z = S.zoom;
   if(px == null){ px = S.gW/2; py = S.gH/2; }
@@ -747,8 +787,11 @@ function drawGraph(){
   const sc = S.gs==="log" ? (x => Math.log(Math.max(x,1))) : (x => x);
   const vs = d.edges.map(val), lo = sc(Math.min(...vs)), hi = sc(Math.max(...vs));
   // widths are scaled over every edge so hiding a protocol doesn't rescale the rest
+  // org wedges: the filter is a single host that's in the graph -> its direct peers only
+  const qip = S.q.trim();
+  const origin = S.gorg && d.nodes.some(n => n.id === qip) ? qip : null;
   const edges = d.edges.map(e => ({...e, w: hi>lo ? 1 + 9*(sc(val(e))-lo)/(hi-lo) : 1}))
-    .filter(e => !S.ghide.has(catOf(e.guess)));
+    .filter(e => !S.ghide.has(catOf(e.guess)) && (!origin || e.a === origin || e.b === origin));
   if(!edges.length){ box.innerHTML = '<div class="empty">all IP pairs hidden by the protocol legend: click a protocol (or "all") to show lines</div>'; return; }
   const live = new Set(edges.flatMap(e => [e.a, e.b]));
   const nodes = d.nodes.filter(n => live.has(n.id)).map(n => ({...n})), idx = {}, adj = {};
@@ -758,19 +801,31 @@ function drawGraph(){
   nodes.forEach(n => n.r = 3 + 9*Math.sqrt(n.bytes/maxB));
   const labelled = new Set([...nodes].sort((a,b)=>b.bytes-a.bytes).slice(0,30).map(n=>n.id));
   nodes.forEach(n => { if(adj[n.id].length >= 3) labelled.add(n.id); });
-  layout(nodes, edges, idx, W, H);
+  if(origin && nodes.length <= 60) nodes.forEach(n => labelled.add(n.id));
+  const groups = d.groups || [], GC = {}; groups.forEach(g => GC[g.id] = g.color);
+  const posStore = origin ? (S.wpos[origin] = S.wpos[origin] || {}) : S.pos;
+  const WG = origin ? wedgeLayout(nodes, edges, idx, origin, groups, W, H, posStore) : null;
+  if(!origin) layout(nodes, edges, idx, W, H);
   const metricTxt = e => num(e.packets)+" pkts · "+bytes(e.bytes)+" · "+e.flows+" conversation"+(e.flows===1?"":"s");
   let s = '<svg class="gsvg" width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">';
+  if(WG){
+    s += '<g class="wedges">' + groups.map((g,i) => '<path class="wedge" fill="'+esc(g.color)+'" stroke="'+esc(g.color)+'"></path>').join("")
+      + groups.map((g,i) => '<text class="wlab" style="fill:'+esc(g.color)+'">'+esc(g.name.toUpperCase())+' · '+WG.counts[i]+'</text>').join("") + '</g>';
+    s += '<text class="cap" x="12" y="20">'+esc(d.asn_loaded ? "direct peers of "+origin+" by network owner · click it again to leave"
+                                                         : "owner table not loaded yet (first download takes a minute): everyone is in Others")+'</text>';
+  }
   edges.forEach((e,i) => {
     s += '<line data-e="'+i+'" stroke="'+CATC[catOf(e.guess)]+'" stroke-width="'+e.w.toFixed(2)+'">'
       + '<title>'+esc(e.a+"  ⇄  "+e.b+"\n"+metricTxt(e)+"\n"+e.labels.join("\n"))+'</title></line>'; });
   nodes.forEach(n => {
-    const nf = repOf(n.id), show = (labelled.has(n.id) || nf) ? "" : " hide", sub = n.host || n.name || n.org || "";
+    const nf = repOf(n.id), show = (labelled.has(n.id) || nf) ? "" : " hide", sub = n.host || n.name || n.org || n.as_name || "";
+    // wedge view: labels on the left half point outward (leftwards) instead of across the centre
+    const lx = WG && n.id !== origin && n.x < idx[origin].x - 1 ? ' x="'+(-(n.r+4)).toFixed(1)+'" text-anchor="end"' : ' x="'+(n.r+4).toFixed(1)+'"';
     s += '<g class="nd" data-n="'+esc(n.id)+'">'
-      + '<circle r="'+n.r.toFixed(1)+'" fill="'+ACLR[ipClass(n.id)]+'"'+(nf&&nf.tier!=="tor"?' style="stroke:var(--red);stroke-width:3"':"")+'/>'
-      + '<text class="a-'+ipClass(n.id)+(nf?" rep-"+nf.tier:"")+show+'" x="'+(n.r+4).toFixed(1)+'" y="4">'+esc(n.id)+'</text>'
-      + (sub ? '<text class="sub'+(n.host?" hn":n.name?"":" org")+show+'" x="'+(n.r+4).toFixed(1)+'" y="18">'+esc(sub.length>34?sub.slice(0,33)+"…":sub)+'</text>' : "")
-      + '<title>'+esc(n.id+(n.host?"\nhost: "+n.host:"")+(n.name?"\n"+n.name:"")+(n.org?"\norg: "+n.org:"")+"\n"+({lan:"LAN/localhost",vpn:"internal/VPN",pub:"public"})[ipClass(n.id)]+" · "+num(n.packets)+" pkts · "+bytes(n.bytes)+" · "+adj[n.id].length+" peers"+(isPublic(n.id)?"\nright-click: whois":""))+'</title></g>'; });
+      + '<circle r="'+n.r.toFixed(1)+'" fill="'+ACLR[ipClass(n.id)]+'"'+(nf&&nf.tier!=="tor"?' style="stroke:var(--red);stroke-width:3"':(WG&&n.asn&&GC[n.grp]?' style="stroke:'+esc(GC[n.grp])+';stroke-width:2.5"':""))+'/>'
+      + '<text class="a-'+ipClass(n.id)+(nf?" rep-"+nf.tier:"")+show+'"'+lx+' y="4">'+esc(n.id)+'</text>'
+      + (sub ? '<text class="sub'+(n.host?" hn":n.name?"":" org")+show+'"'+lx+' y="18">'+esc(sub.length>34?sub.slice(0,33)+"…":sub)+'</text>' : "")
+      + '<title>'+esc(n.id+(n.host?"\nhost: "+n.host:"")+(n.name?"\n"+n.name:"")+(n.org?"\norg: "+n.org:"")+(n.asn?"\nnetwork: AS"+n.asn+" "+(n.as_name||"")+(n.cc?" ("+n.cc+")":""):"")+"\n"+({lan:"LAN/localhost",vpn:"internal/VPN",pub:"public"})[ipClass(n.id)]+" · "+num(n.packets)+" pkts · "+bytes(n.bytes)+" · "+adj[n.id].length+" peers"+(isPublic(n.id)?"\nright-click: whois":""))+'</title></g>'; });
   box.innerHTML = s + '</svg><div class="zbar"><button data-gz="in" title="zoom in">+</button><button data-gz="out" title="zoom out">−</button><button data-gz="reset" title="reset view">fit</button><span id="zlab"></span></div>';
 
   box.querySelectorAll("text.rep-bad,text.rep-watch,text.rep-tor").forEach(t => {
@@ -780,6 +835,7 @@ function drawGraph(){
     t.parentNode.insertBefore(r, t);
   });
   const svg = box.querySelector("svg"), lines = svg.querySelectorAll("line"), gEls = {};
+  const wPaths = [...svg.querySelectorAll("path.wedge")], wLabs = [...svg.querySelectorAll("text.wlab")];
   svg.querySelectorAll(".nd").forEach(g => gEls[g.dataset.n] = g);
   const place = () => {
     const k = Z.k, tx = Z.tx, ty = Z.ty;
@@ -787,6 +843,16 @@ function drawGraph(){
       l.setAttribute("x1", (a.x*k+tx).toFixed(1)); l.setAttribute("y1", (a.y*k+ty).toFixed(1));
       l.setAttribute("x2", (b.x*k+tx).toFixed(1)); l.setAttribute("y2", (b.y*k+ty).toFixed(1)); });
     nodes.forEach(n => gEls[n.id].setAttribute("transform", "translate("+(n.x*k+tx).toFixed(1)+","+(n.y*k+ty).toFixed(1)+")"));
+    if(WG){
+      const o = idx[origin], ox = o.x*k+tx, oy = o.y*k+ty, rx = WG.rx*k, ry = WG.ry*k;
+      const P = (a, f) => [ox + f*rx*Math.sin(a), oy - f*ry*Math.cos(a)];
+      wPaths.forEach((p, i) => { const a0 = i*WG.span, pts = [];
+        for(let a = a0; a <= a0 + WG.span + 1e-6; a += Math.PI/90) pts.push(P(a, 1.04));
+        p.setAttribute("d", "M"+ox.toFixed(1)+","+oy.toFixed(1)+pts.map(q => "L"+q[0].toFixed(1)+","+q[1].toFixed(1)).join("")+"Z"); });
+      wLabs.forEach((t, i) => { const a = (i+0.5)*WG.span, q = P(a, 1.1), sx = Math.sin(a);
+        t.setAttribute("x", q[0].toFixed(1)); t.setAttribute("y", (q[1]+4).toFixed(1));
+        t.setAttribute("text-anchor", sx > 0.2 ? "start" : sx < -0.2 ? "end" : "middle"); });
+    }
     svg.classList.toggle("zin", k >= 1.8);
     const zl = document.getElementById("zlab"); if(zl) zl.textContent = k.toFixed(1)+"×";
   };
@@ -834,12 +900,12 @@ function drawGraph(){
     if(dr.pan){ Z.tx = dr.tx0 + e.clientX - dr.x0; Z.ty = dr.ty0 + e.clientY - dr.y0; place(); return; }
     if(dr.grp){
       const dx = (e.clientX - dr.x0)/Z.k, dy = (e.clientY - dr.y0)/Z.k;
-      for(const m of dr.grp){ const n = idx[m.id]; n.x = m.x + dx; n.y = m.y + dy; S.pos[n.id] = {x:n.x/W, y:n.y/H}; }
+      for(const m of dr.grp){ const n = idx[m.id]; n.x = m.x + dx; n.y = m.y + dy; posStore[n.id] = {x:n.x/W, y:n.y/H}; }
       place(); return;
     }
     const r = svg.getBoundingClientRect(), n = idx[dr.id];
     n.x = (e.clientX - r.left - Z.tx)/Z.k; n.y = (e.clientY - r.top - Z.ty)/Z.k;
-    S.pos[n.id] = {x:n.x/W, y:n.y/H};
+    posStore[n.id] = {x:n.x/W, y:n.y/H};
     place(); });
   const end = () => { const dr = S.drag; S.drag = null; svg.classList.remove("panning"); if(!dr) return;
     if(!dr.pan && !dr.moved){ setQ(S.q===dr.id ? "" : dr.id, S.q!==dr.id); } };
@@ -904,7 +970,7 @@ async function loadView(force){
     } else {
       if(S.drag) return;  // don't yank the graph out from under a drag
       S.gdata = await api(base+"/graph?limit=150&q="+q);
-      if(S.posFor !== S.sel){ S.pos = {}; S.posFor = S.sel; S.zoom = {k:1,tx:0,ty:0}; }
+      if(S.posFor !== S.sel){ S.pos = {}; S.wpos = {}; S.posFor = S.sel; S.zoom = {k:1,tx:0,ty:0}; }
       html = mixView(sum); $("#exp1").href = base+"/flows.csv"; $("#exp2").style.display="none";
       count = S.gdata.total_edges > S.gdata.edges.length ? "graph: top "+S.gdata.edges.length+" of "+num(S.gdata.total_edges)+" pairs" : num(S.gdata.total_edges)+" pairs";
     }

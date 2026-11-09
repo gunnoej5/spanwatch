@@ -18,6 +18,7 @@ from .session import Session
 from .whois import Whois
 from .reputation import Reputation, Feeds, AbuseIPDB, TIER_RANK
 from .pihole import PiHole
+from .asn import AsnDB
 
 REP_KEYWORDS = {"is:flagged": ("bad", "watch"), "is:bad": ("bad",), "is:watch": ("watch",),
                 "is:tor": ("tor",), "is:any": ("bad", "watch", "tor")}
@@ -35,7 +36,7 @@ class ApiError(Exception):
 class App:
     def __init__(self, store, iface, dns_ports=(53,), max_duration=3600,
                  keep=50, allow_addressed=False, whois=None, lan=(), hosts_file=None,
-                 reputation=None, pihole=None):
+                 reputation=None, pihole=None, asn=None):
         self.store = store
         self.iface = iface
         self.dns_ports = tuple(dns_ports)
@@ -52,6 +53,7 @@ class App:
         self._next_id = store.next_id()
         self.hosts = Directory(store, hosts_file, live=self._live_hosts)
         self.pihole = pihole or PiHole(None, enabled=False)
+        self.asn = asn or AsnDB(None, enabled=False)
 
     # ------------------------------------------------------------ control
     def start(self, duration, note=""):
@@ -194,6 +196,7 @@ class App:
             "reputation": {"feeds": self.rep.feeds.status(), "feeds_enabled": self.rep.feeds.enabled,
                            "abuseipdb": self.rep.abuse.enabled},
             "pihole": self.pihole.status(),
+            "asn": self.asn.status(),
             "host": os.uname().nodename, "now": time.time(),
         }
 
@@ -460,6 +463,13 @@ class Handler(BaseHTTPRequestHandler):
             for nd in g["nodes"]:
                 nd["org"] = app.whois.short(nd["id"])
                 nd["host"] = hn.get(nd["id"], "")
+                a = app.asn.lookup(nd["id"])
+                if a:
+                    nd.update(asn=a["asn"], as_name=a["as_name"], cc=a["cc"], grp=a["grp"])
+                else:
+                    nd["grp"] = "other"
+            g["groups"] = app.asn.groups.public()
+            g["asn_loaded"] = app.asn.tab is not None
             return self._send(200, g)
         if what == "dns":
             app.summary(sid)

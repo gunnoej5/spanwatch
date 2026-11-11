@@ -70,6 +70,10 @@ def main(argv=None):
                     help="disable the daily iptoasn.com download (graph org wedges, owner labels)")
     sv.add_argument("--orgs-file", default="/etc/spanwatch/orgs.json",
                     help="JSON list of org groups for the graph wedges (optional)")
+    sv.add_argument("--wan-ip", action="append", default=[],
+                    help="router WAN-side address seen on the wire (repeatable). Enables "
+                         "inside/outside correlation: nests a matching outside (NAT'd) "
+                         "flow or DNS upstream lookup under its inside counterpart.")
     sv.add_argument("--no-whois", action="store_true",
                     help="disable on-demand RDAP/Cymru lookups (no outbound traffic)")
 
@@ -125,7 +129,8 @@ def main(argv=None):
     asn = AsnDB(_data_dir(a.data), enabled=not a.no_asn, groups=Groups.load(a.orgs_file))
     app = App(store, a.iface, _ports(a.dns_ports), a.max_duration, a.keep, a.allow_addressed,
               whois=Whois(store, enabled=not a.no_whois), lan=a.lan,
-              hosts_file=a.hosts_file or None, reputation=reputation, pihole=pihole, asn=asn)
+              hosts_file=a.hosts_file or None, reputation=reputation, pihole=pihole, asn=asn,
+              wan_ips=a.wan_ip)
     feeds.start()
     asn.start()
     pihole.start()

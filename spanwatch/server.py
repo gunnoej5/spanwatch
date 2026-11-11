@@ -19,10 +19,13 @@ from .whois import Whois
 from .reputation import Reputation, Feeds, AbuseIPDB, TIER_RANK
 from .pihole import PiHole
 from .asn import AsnDB
+from .correlate import correlate, correlate_dns
 
 REP_KEYWORDS = {"is:flagged": ("bad", "watch"), "is:bad": ("bad",), "is:watch": ("watch",),
                 "is:tor": ("tor",), "is:any": ("bad", "watch", "tor")}
 BLOCK_KEYWORD = "is:blocked"
+SIDE_KEYWORDS = {"side:inside": ("inside",), "side:outside": ("outside",)}
+MATCH_KEYWORDS = {"is:matched": True, "is:unmatched": False}
 
 STATIC = os.path.join(os.path.dirname(__file__), "static")
 
@@ -36,7 +39,7 @@ class ApiError(Exception):
 class App:
     def __init__(self, store, iface, dns_ports=(53,), max_duration=3600,
                  keep=50, allow_addressed=False, whois=None, lan=(), hosts_file=None,
-                 reputation=None, pihole=None, asn=None):
+                 reputation=None, pihole=None, asn=None, wan_ips=()):
         self.store = store
         self.iface = iface
         self.dns_ports = tuple(dns_ports)
@@ -54,6 +57,7 @@ class App:
         self.hosts = Directory(store, hosts_file, live=self._live_hosts)
         self.pihole = pihole or PiHole(None, enabled=False)
         self.asn = asn or AsnDB(None, enabled=False)
+        self.wan_ips = set(wan_ips)
 
     # ------------------------------------------------------------ control
     def start(self, duration, note=""):
@@ -130,16 +134,17 @@ class App:
         for f in rows:
             f["client_host"] = hn.get(f["client"], "")
             f["server_host"] = hn.get(f["server"], "")
-        return rows
+        return correlate(rows, self.wan_ips, self.lan())
 
     def dns(self, sid):
         live = self._live(sid)
         rows = live.dns_rows() if live else self.store.dns(sid)
         hn = self.hosts.lookup()
         bf = self.pihole.block_for
-        return [dict(d, client_host=hn.get(d["client"], ""), resolver_host=hn.get(d["resolver"], ""),
+        rows = [dict(d, client_host=hn.get(d["client"], ""), resolver_host=hn.get(d["resolver"], ""),
                      blocked=bf(d["client"], d["qname"], d["ts"]))
                 for d in rows]
+        return correlate_dns(rows, self.wan_ips)
 
     def host_rows(self, q=""):
         rows = self.hosts.rows(q)
@@ -163,9 +168,16 @@ class App:
 
     def rep_filter(self, rows, q, fields):
         """'is:flagged' style keywords filter on reputation instead of text."""
-        if q.strip().lower() == BLOCK_KEYWORD:
+        ql = q.strip().lower()
+        if ql == BLOCK_KEYWORD:
             return [r for r in rows if r.get("blocked")], ""
-        tiers = REP_KEYWORDS.get(q.strip().lower())
+        if ql in SIDE_KEYWORDS:
+            sides = SIDE_KEYWORDS[ql]
+            return [r for r in rows if r.get("side") in sides], ""
+        if ql in MATCH_KEYWORDS:
+            want = MATCH_KEYWORDS[ql]
+            return [r for r in rows if bool(r.get("matched")) == want], ""
+        tiers = REP_KEYWORDS.get(ql)
         if tiers is None:
             return rows, q
         def hit(r):
@@ -197,6 +209,7 @@ class App:
                            "abuseipdb": self.rep.abuse.enabled},
             "pihole": self.pihole.status(),
             "asn": self.asn.status(),
+            "wan_ips": sorted(self.wan_ips),
             "host": os.uname().nodename, "now": time.time(),
         }
 

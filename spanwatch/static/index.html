@@ -131,6 +131,13 @@ td.r,th.r{text-align:right}
 .ans{white-space:normal;color:var(--dim);max-width:520px;word-break:break-all}
 .qn{color:var(--text)}
 .blk{display:inline-block;margin-left:6px;padding:0 5px;border:1px solid var(--red-d);border-radius:3px;color:var(--red);font-size:10px;letter-spacing:.04em;cursor:pointer}
+.m-tog{display:inline-block;margin-left:6px;padding:0 5px;border:1px solid var(--line2);border-radius:3px;color:var(--dim);font-size:10px;letter-spacing:.04em;cursor:pointer}
+.m-tog:hover{color:var(--text);border-color:var(--sig-d)}
+.m-tog.amb{border-color:var(--amber-d);color:var(--amber)}
+tr.m-nested{background:rgba(108,182,255,.04)}
+tr.m-nested td:first-child{padding-left:26px;color:var(--dim)}
+tr.m-nested .arrow,tr.m-nested .svc{color:var(--faint)}
+td.conf3{color:var(--sig)}td.conf2{color:var(--amber)}td.conf1{color:var(--dim)}
 tr.blocked .qn{color:var(--red);text-decoration:line-through;text-decoration-color:var(--red-d)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
 .sect{background:var(--panel);border:1px solid var(--line2)}
@@ -258,6 +265,7 @@ function ghideSave(){ try{ localStorage.setItem("spanwatch.graph.hide", JSON.str
 const DUR = [[30,"30s"],[120,"2m"],[300,"5m"],[900,"15m"],[3600,"60m"]];
 const S = {dur: 120, sel: null, tab: "flows", sort: "bytes", q: "", status: null, sessions: [], timer: null,
   gm: "packets", gs: "log", pos: {}, gdata: null, drag: null, posFor: null, ghide: new Set(ghideLoad()),
+  mopen: new Set(),
   wpos: {}, gorg: (()=>{ try{ return localStorage.getItem("spanwatch.graph.org") !== "0"; }catch(e){ return true; } })(),
   zoom: {k:1, tx:0, ty:0}, gplace: null, gW: 800, gH: 500, wip: null};
 const CAT = {wireguard:"vpn",openvpn:"vpn",ipsec:"vpn","pptp-vpn":"vpn","l2tp-vpn":"vpn",gre:"vpn",
@@ -515,6 +523,11 @@ function renderMeter(s, fc){
 // ---------------------------------------------------------------- views
 function setTab(t){ S.tab=t; history.replaceState(null,"","#"+t); document.querySelectorAll("#tabs button[data-t]").forEach(b=>b.classList.toggle("sel", b.dataset.t===t)); }
 $("#meter").onclick = e => { const c = e.target.closest("[data-qset]"); if(c) setQ(c.dataset.qset, true); };
+document.addEventListener("click", e => {
+  const t = e.target.closest(".m-tog[data-mtog]"); if(t){ const k = t.dataset.mtog;
+    if(S.mopen.has(k)) S.mopen.delete(k); else S.mopen.add(k); e.stopPropagation(); loadView(); return; }
+  const sc = e.target.closest(".svc[data-qset]"); if(sc){ e.stopPropagation(); setQ(sc.dataset.qset, true); }
+}, true);
 document.addEventListener("click", e => { const c = e.target.closest(".blk[data-qset]"); if(c){ e.stopPropagation(); setQ(c.dataset.qset, true); } }, true);
 $("#tabs").onclick = e => { const t = e.target.dataset?.t; if(t){ setTab(t); loadView(true) } };
 if(["flows","dns","mix","hosts"].includes(location.hash.slice(1))) setTab(location.hash.slice(1));
@@ -632,25 +645,52 @@ $("#view").onclick = e => {
     drawGraph(); }
 };
 
+function matchBadge(m, kind, key){
+  // kind: "flow" | "dns" — just changes the hover text and what the nested row needs to show
+  const open = S.mopen.has(key);
+  const label = (open?"▾ ":"▸ ") + (m.score == null ? (open?"hide":"show")
+    : m.ambiguous ? "≈"+Math.round(m.score*100)+"% ("+m.ties+" tied)" : "✓ "+Math.round(m.score*100)+"%");
+  const tip = kind === "flow"
+    ? "Also seen leaving via the router's WAN address ("+m.wan+"), same destination/port, "
+      + Math.round(m.score*100)+"% match on packet/byte counts"+(m.ambiguous?" — "+m.ties+" inside flows tied, picked the closest":"")+". Click to "+(open?"hide":"show")+"."
+    : "The resolver's own upstream lookup for the same question, "+m.delay_ms+"ms later via "+m.wan+". Click to "+(open?"hide":"show")+".";
+  return '<span class="m-tog'+(m.ambiguous?" amb":"")+'" data-mtog="'+esc(key)+'" title="'+esc(tip)+'">'+esc(label)+'</span>';
+}
+function sideChip(side){
+  if(!side) return "";
+  return '<span class="svc" style="margin-left:4px" title="side: '+side+' (click to filter)" data-qset="side:'+side+'">'+side+'</span>';
+}
 function flowsTable(d){
   if(!d.rows.length) return '<div class="empty">no conversations'+(S.q?" match":" yet")+'</div>';
   const th = (k,l,cls="") => '<th '+(k?'data-sort="'+k+'"':"")+' class="'+cls+(S.sort===k?" sorted":"")+'">'+l+'</th>';
+  const nestedFlow = (m) => '<tr class="m-nested"><td>'+esc(m.wan)+' <span class="svc">(WAN)</span></td><td class="arrow">→</td><td colspan="2" class="svc">same server/port, '
+      + 'confirmed from the outside</td><td class="conf'+m.confidence+'">conf '+m.confidence+'</td>'
+      + '<td class="r">'+num(m.pkts_cs)+' <span class="dir">/</span> '+num(m.pkts_sc)+'</td>'
+      + '<td class="r">'+bytes(m.bytes_cs)+' <span class="dir">/</span> '+bytes(m.bytes_sc)+'</td>'
+      + '<td class="dir">'+tfmt(m.first)+'</td><td class="dir">'+tfmt(m.last)+'</td></tr>';
   return '<table><thead><tr>'+th("","client")+th("","")+th("","server")+th("","proto")+th("port","port")+th("","guess")+th("pkts","pkts →/←","r")+th("bytes","bytes →/←","r")+th("first","first")+th("last","last")+'</tr></thead><tbody>'
-    + d.rows.map(f => '<tr><td>'+ipCell(f.client,f.client_name,f.client_host)+'</td><td class="arrow">→</td><td>'+ipCell(f.server,f.server_name,f.server_host)+'</td>'
+    + d.rows.map(f => '<tr'+(f.matched?' class="m-row"':'')+'><td>'+ipCell(f.client,f.client_name,f.client_host)+sideChip(f.side)+'</td><td class="arrow">→</td><td>'+ipCell(f.server,f.server_name,f.server_host)+'</td>'
       + '<td class="p-'+esc(f.proto)+'">'+esc(f.proto)+'</td>'
       + '<td>'+(f.port==null?'<span class="svc">—</span>':esc(f.port)+(f.service?' <span class="svc">'+esc(f.service)+'</span>':""))+'</td>'
-      + '<td>'+guessCell(f)+'</td>'
+      + '<td>'+guessCell(f)+(f.matched?matchBadge(f.matched,"flow",flowKey(f)):"")+'</td>'
       + '<td class="r">'+num(f.pkts_cs)+' <span class="dir">/</span> '+num(f.pkts_sc)+'</td>'
       + '<td class="r">'+bytes(f.bytes_cs)+' <span class="dir">/</span> '+bytes(f.bytes_sc)+'</td>'
-      + '<td class="dir">'+tfmt(f.first)+'</td><td class="dir">'+tfmt(f.last)+'</td></tr>').join("")
+      + '<td class="dir">'+tfmt(f.first)+'</td><td class="dir">'+tfmt(f.last)+'</td></tr>'
+      + (f.matched && S.mopen.has(flowKey(f)) ? nestedFlow(f.matched) : "")).join("")
     + '</tbody></table>';
 }
+function flowKey(f){ return f.client+"|"+f.server+"|"+f.proto+"|"+f.port; }
+function dnsKey(x){ return x.client+"|"+x.resolver+"|"+x.qname+"|"+x.ts; }
 function dnsTable(d){
   if(!d.rows.length) return '<div class="empty">no DNS '+(S.q?"matches":"seen yet")+' — only plaintext DNS on port(s) '+esc((S.status?.dns_ports||[53]).join(","))+' is visible; DoH/DoT is opaque</div>';
+  const nestedDns = (m) => '<tr class="m-nested"><td class="dir">+'+m.delay_ms+'ms</td><td>'+esc(m.wan)+' <span class="svc">(WAN)</span></td><td class="svc">↳</td>'
+      + '<td class="svc">same question, asked upstream</td><td class="ans">'+(m.answers.length?esc(m.answers.join(", ")):'<span class="dir">—</span>')+'</td>'
+      + '<td>'+ipCell(m.resolver,"","")+'</td><td class="rc-'+esc(m.rcode)+'">'+esc(m.rcode)+'</td><td class="r dir"></td></tr>';
   return '<table><thead><tr><th>time</th><th>requestor</th><th>type</th><th>query</th><th>answer</th><th>provider</th><th>rcode</th><th class="r">ms</th></tr></thead><tbody>'
-    + d.rows.map(x => '<tr'+(x.blocked?' class="blocked"':'')+'><td class="dir">'+tfmt(x.ts)+'</td><td>'+ipCell(x.client,"",x.client_host)+'</td><td class="svc">'+esc(x.qtype)+'</td>'
-      + '<td class="qn">'+esc(x.qname)+(x.blocked?'<span class="blk" data-qset="is:blocked" title="Pi-hole blocked this lookup ('+esc(x.blocked)+'). Click to filter: is:blocked">blocked</span>':'')+'</td><td class="ans">'+(x.answers.length?esc(x.answers.join(", ")):'<span class="dir">—</span>')+'</td>'
-      + '<td>'+ipCell(x.resolver,"",x.resolver_host)+'</td><td class="rc-'+esc(x.rcode)+'">'+esc(x.rcode)+'</td><td class="r dir">'+(x.ms==null?"":x.ms)+'</td></tr>').join("")
+    + d.rows.map(x => '<tr'+(x.blocked?' class="blocked"':'')+'><td class="dir">'+tfmt(x.ts)+'</td><td>'+ipCell(x.client,"",x.client_host)+sideChip(x.side)+'</td><td class="svc">'+esc(x.qtype)+'</td>'
+      + '<td class="qn">'+esc(x.qname)+(x.blocked?'<span class="blk" data-qset="is:blocked" title="Pi-hole blocked this lookup ('+esc(x.blocked)+'). Click to filter: is:blocked">blocked</span>':'')+(x.matched?matchBadge(x.matched,"dns",dnsKey(x)):'')+'</td><td class="ans">'+(x.answers.length?esc(x.answers.join(", ")):'<span class="dir">—</span>')+'</td>'
+      + '<td>'+ipCell(x.resolver,"",x.resolver_host)+'</td><td class="rc-'+esc(x.rcode)+'">'+esc(x.rcode)+'</td><td class="r dir">'+(x.ms==null?"":x.ms)+'</td></tr>'
+      + (x.matched && S.mopen.has(dnsKey(x)) ? nestedDns(x.matched) : "")).join("")
     + '</tbody></table>';
 }
 function hist(title, rows, fmt, cls="", labeler){

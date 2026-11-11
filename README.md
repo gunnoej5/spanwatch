@@ -155,6 +155,42 @@ Coverage depends on what the mirror carries. DHCP happens at join/renew time
 these (some IoT) stay nameless. Pin those in the override file. DHCPv6 is not
 parsed.
 
+## Inside/outside correlation (one capture, both sides of a NAT hop)
+
+If your SPAN setup mirrors a device's LAN-side traffic *and* the router's
+WAN-side traffic onto the same capture (as described in the two-SPAN wiring
+above), every internet conversation shows up twice: once with the device's
+real address, once with the router's public/WAN address after NAT rewrites
+the source. `--wan-ip` (repeatable) tells spanwatch which address that is,
+so it can join the two legs back into one:
+
+```bash
+# in /etc/spanwatch/spanwatch.env
+SPANWATCH_ARGS=--pihole-url http://172.30.250.2 --wan-ip 172.16.1.7
+```
+
+**Conversations tab:** a matched inside flow gets a small badge (`✓ 98%`, or
+`≈ 91% (2 tied)` when more than one device could explain the same outside
+flow equally well). Click it to expand a nested row showing the outside leg
+— same destination/port, confirmed from the WAN side, with its own
+packet/byte counts. The matching outside flow is removed from the top-level
+list so it isn't double-counted. Filter with `side:inside` / `side:outside`.
+Matching is by destination+port+protocol, overlapping time, and how closely
+packet/byte counts line up (NAT doesn't touch payload, so these usually
+match within a percent or two). It's a best-effort join, not ground truth —
+ties are shown, not guessed.
+
+**DNS tab:** weaker and sparser. An inside query (device → your resolver)
+and the resolver's own outside upstream lookup (router WAN → 9.9.9.9 /
+Quad9 / OpenDNS / etc) are two different conversations, one hop apart,
+linked only by asking the same question moments later — and only on a
+cache miss, so most queries never show a match at all. When one does,
+it nests the same way, with the delay between the two.
+
+Flows or DNS rows where neither address is yours (or both are) get no side
+at all — ordinary LAN-to-LAN traffic and the outside leg's own unrelated
+destinations are left alone.
+
 ## Org wedges (graph)
 
 With **org wedges on** (button next to re-layout, on by default), clicking a

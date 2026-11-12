@@ -66,6 +66,9 @@ def main(argv=None):
     sv.add_argument("--pihole-key-file", default="/etc/spanwatch/pihole.key",
                     help="Pi-hole app password file (systemd passes it as a credential)")
     sv.add_argument("--pihole-interval", type=int, default=300, help="seconds between Pi-hole polls")
+    sv.add_argument("--hostname", default=None,
+                    help="name shown in the dashboard header instead of the system hostname "
+                         "(e.g. to keep a real device nickname off a shared screenshot)")
     sv.add_argument("--no-asn", action="store_true",
                     help="disable the daily iptoasn.com download (graph org wedges, owner labels)")
     sv.add_argument("--orgs-file", default="/etc/spanwatch/orgs.json",
@@ -130,7 +133,7 @@ def main(argv=None):
     app = App(store, a.iface, _ports(a.dns_ports), a.max_duration, a.keep, a.allow_addressed,
               whois=Whois(store, enabled=not a.no_whois), lan=a.lan,
               hosts_file=a.hosts_file or None, reputation=reputation, pihole=pihole, asn=asn,
-              wan_ips=a.wan_ip)
+              wan_ips=a.wan_ip, hostname=a.hostname)
     feeds.start()
     asn.start()
     pihole.start()

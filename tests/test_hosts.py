@@ -195,6 +195,14 @@ class ResolveTests(unittest.TestCase):
 
 
 class StoreHttpTests(unittest.TestCase):
+    def test_hostname_override(self):
+        with tempfile.TemporaryDirectory() as d:
+            st = Store(os.path.join(d, "x.db"))
+            default_app = App(st, "definitely-not-an-iface0")
+            self.assertEqual(default_app.status()["host"], os.uname().nodename)
+            named_app = App(st, "definitely-not-an-iface0", hostname="demo-lan")
+            self.assertEqual(named_app.status()["host"], "demo-lan")
+
     def test_roundtrip(self):
         with tempfile.TemporaryDirectory() as d:
             pcap = os.path.join(d, "lan.pcap")

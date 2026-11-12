@@ -1,6 +1,6 @@
 # spanwatch
 
-![spanwatch dashboard: breakdown, IP relationship graph, and whois quick view](docs/screenshot.png)
+![spanwatch dashboard: breakdown, traffic guesses, DNS log, and the IP relationship graph legend](docs/screenshot.png)
 
 Passive LAN traffic summarizer for a switch **SPAN / mirror port**. It runs short,
 bounded capture sessions on a dedicated, address-less sniff NIC and summarizes them
@@ -14,13 +14,16 @@ in a small local dashboard:
 - **Breakdown**: top talkers, protocols, services, traffic guesses, DNS names,
   requestors, providers, rcodes, and non-IP frames (ARP, LLDP, …).
 - **IP relationship graph** (under Breakdown): an undirected force layout of IP pairs.
-  Line width runs from 1px (seen least) to 6px (seen most). Choose packets,
+  Line width runs from 1px (seen least) to 10px (seen most). Choose packets,
   conversations, or bytes, on a log or linear scale. Line colour shows the
   traffic guess, node colour shows the address class, and node size shows volume.
+  Click a protocol in the legend to hide/show its lines (shift-click isolates
+  just that one, **all** resets); hidden choices persist in this browser.
   Hover a node to highlight its peers, click it to filter on it, or drag it.
   Scroll to zoom around the cursor (labels for every node appear at about 1.8×),
   drag the background to pan, and double-click or press **fit** to reset.
-  Line widths keep their 1–6px meaning at any zoom level.
+  Line widths keep their 1–10px meaning at any zoom level. With **org wedges**
+  on (see below), clicking a host lays its direct peers out by network owner.
 - **Local hostnames** (Hosts tab): learned passively from DHCP, mDNS, NetBIOS, LLMNR and reverse DNS; exportable as a hosts file (see below).
 - **Whois quick view**: the ⓘ next to any public IP, or right-clicking a graph node,
   opens a side panel. It shows the org, network name/handle, range/CIDR, origin
@@ -301,7 +304,9 @@ To ship code changes: `sudo deploy/install.sh update`. To remove everything:
 `sudo deploy/install.sh uninstall`, which keeps the data.
 
 Options live in `/etc/spanwatch/spanwatch.env`, for example
-`SPANWATCH_ARGS=--dns-ports 53,5353,5355 --keep 100`.
+`SPANWATCH_ARGS=--dns-ports 53,5353,5355 --keep 100`. `--hostname NAME`
+overrides what the dashboard header shows instead of the real system hostname
+(handy if you don't want a device nickname in a screenshot).
 
 ### Offline / dev
 
@@ -325,3 +330,7 @@ python3 -m spanwatch status --iface span0             # exit 0 iff present and a
   ports, packets between them are counted twice.
 - **Fragments.** Non-first IP fragments carry no ports, so they show as a portless row.
 - Session memory is capped at 250k conversations and 100k DNS records.
+
+## License
+
+[MIT](LICENSE)

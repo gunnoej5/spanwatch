@@ -39,7 +39,7 @@ class ApiError(Exception):
 class App:
     def __init__(self, store, iface, dns_ports=(53,), max_duration=3600,
                  keep=50, allow_addressed=False, whois=None, lan=(), hosts_file=None,
-                 reputation=None, pihole=None, asn=None, wan_ips=()):
+                 reputation=None, pihole=None, asn=None, wan_ips=(), hostname=None):
         self.store = store
         self.iface = iface
         self.dns_ports = tuple(dns_ports)
@@ -58,6 +58,7 @@ class App:
         self.pihole = pihole or PiHole(None, enabled=False)
         self.asn = asn or AsnDB(None, enabled=False)
         self.wan_ips = set(wan_ips)
+        self.hostname = hostname
 
     # ------------------------------------------------------------ control
     def start(self, duration, note=""):
@@ -210,7 +211,7 @@ class App:
             "pihole": self.pihole.status(),
             "asn": self.asn.status(),
             "wan_ips": sorted(self.wan_ips),
-            "host": os.uname().nodename, "now": time.time(),
+            "host": self.hostname or os.uname().nodename, "now": time.time(),
         }
 
 
